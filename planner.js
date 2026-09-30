@@ -84,8 +84,8 @@ function bind(){
  $$('[data-page]').forEach(b=>b.onclick=()=>{state.page=b.dataset.page;render();});
  $$('[data-action]').forEach(b=>b.onclick=()=>action(b.dataset.action,b.dataset));
  $$('[data-listtab]').forEach(b=>b.onclick=()=>{listTab=b.dataset.listtab;render();});
- $$('[data-pack]').forEach(x=>x.onchange=async()=>{const i=trip().items.find(y=>y.gearId===x.dataset.pack);i.checked=x.checked;await store.save();render();});
- $$('[data-shop]').forEach(x=>x.onchange=async()=>{trip().shopping[+x.dataset.shop].checked=x.checked;await store.save();render();});
+ $$('[data-pack]').forEach(x=>x.onchange=async()=>{const t=trip(),i=t.items.find(y=>y.gearId===x.dataset.pack);i.checked=x.checked;t.updatedAt=now();await store.save();render();});
+ $$('[data-shop]').forEach(x=>x.onchange=async()=>{const t=trip();t.shopping[+x.dataset.shop].checked=x.checked;t.updatedAt=now();await store.save();render();});
  $$('[data-recipe-slot]').forEach(x=>x.onchange=async()=>{const t=trip();t.recipeMeals??={};t.recipeMeals[x.dataset.recipeSlot]=x.value;t.shopping.filter(item=>item.recipeId===x.dataset.recipeSlot).forEach(item=>item.meal=x.value);await store.save();render();});
  $('#gear-search')?.addEventListener('input',e=>{const q=e.target.value.toLowerCase();$('#gear-list').innerHTML=gearRows(state.gear.filter(g=>(g.name+g.category+g.id).toLowerCase().includes(q)));$$('[data-action]', $('#gear-list')).forEach(b=>b.onclick=()=>action(b.dataset.action,b.dataset));});
  $('#gear-category-filter')?.addEventListener('change',e=>{gearCategoryFilter=e.target.value;render();});

@@ -200,7 +200,9 @@
       clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 120);
     }
     async pull() {
-      const rows = await this.request('/rest/v1/camp_documents?select=version,data,updated_at&limit=1');
+      // A successful poll is useless if a browser hands us a cached GET
+      // response.  Checklist changes need the current server version.
+      const rows = await this.request('/rest/v1/camp_documents?select=version,data,updated_at&limit=1', { cache: 'no-store' });
       return rows?.[0] || null;
     }
     async sync(getState, replaceState) {
