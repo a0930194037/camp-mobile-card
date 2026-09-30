@@ -1445,6 +1445,11 @@ addToTripDialog = function filteredAddToTripDialog() {
         const gear = gearById(input.value);
         if (!gear || writableTrip.items.some(entry => entry.gearId === gear.id)) return;
         const entry = item(gear.id, '手動加入');
+        // The display ID can be changed by an import. Give a newly added row
+        // an immutable identity before it reaches the sync queue.
+        writableTrip.syncId ??= `legacy:trips:${writableTrip.id}`;
+        entry.gearSyncId = gear.syncId || `legacy:gear:${gear.id}`;
+        entry.syncId = `${writableTrip.syncId}:item:${entry.gearSyncId}`;
         entry.manual = true;
         writableTrip.items.push(entry);
         if (!writableTrip.overrides.added.some(itemData => itemData.gearId === gear.id)) writableTrip.overrides.added.push(structuredClone(entry));

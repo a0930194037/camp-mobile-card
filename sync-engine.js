@@ -172,8 +172,9 @@
         }
         const oldOverrides = old.overrides || { added: [], removed: [] };
         const newOverrides = after.overrides || { added: [], removed: [] };
-        const oldAdded = new Map((oldOverrides.added || []).map(entry => [String(entry.gearId), entry]));
-        const newAdded = new Map((newOverrides.added || []).map(entry => [String(entry.gearId), entry]));
+        const overrideId = entry => String(entry?.gearSyncId || entry?.gearId);
+        const oldAdded = new Map((oldOverrides.added || []).map(entry => [overrideId(entry), entry]));
+        const newAdded = new Map((newOverrides.added || []).map(entry => [overrideId(entry), entry]));
         new Set([...oldAdded.keys(), ...newAdded.keys()]).forEach(gearId => this.walk(oldAdded.get(gearId), newAdded.get(gearId), `override:trips:${id}:added:${gearId}`, [], output));
         const oldRemoved = new Set(oldOverrides.removed || []), newRemoved = new Set(newOverrides.removed || []);
         new Set([...oldRemoved, ...newRemoved]).forEach(gearId => {
@@ -228,9 +229,9 @@
           if (!operation.deleted) entity.overrides.removed.push(row);
           return;
         }
-        let value = entity.overrides.added.find(entry => String(entry.gearId) === row);
+        let value = entity.overrides.added.find(entry => String(entry.gearSyncId || entry.gearId) === row);
         if (operation.deleted && !path.length) { if (value) entity.overrides.added.splice(entity.overrides.added.indexOf(value), 1); return; }
-        if (!value) { value = { gearId: row }; entity.overrides.added.push(value); }
+        if (!value) { value = { gearSyncId: row }; entity.overrides.added.push(value); }
         this.applyAt(value, path, operation); return;
       }
       if (kind === 'entity') {
