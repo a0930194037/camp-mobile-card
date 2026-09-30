@@ -30,9 +30,12 @@
   // HLC still orders offline work and protects the local intent.
   const compareOperations = (left, right) => {
     const leftSeq = Number(left?.serverSeq || 0), rightSeq = Number(right?.serverSeq || 0);
-    if (leftSeq && rightSeq && leftSeq !== rightSeq) return leftSeq - rightSeq;
+    // A sequenced operation is newer-format server-confirmed data. It must
+    // also win over pre-sequence legacy rows, whose device clock may be far in
+    // the future. That closes the last migration path which could undo a tick.
+    if (leftSeq || rightSeq) return leftSeq - rightSeq
+      || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
     return cmp(left?.clock, right?.clock)
-      || leftSeq - rightSeq
       || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
   };
   const clockKey = (target, path) => `${target}/${path.map(encodeURIComponent).join('/')}`;

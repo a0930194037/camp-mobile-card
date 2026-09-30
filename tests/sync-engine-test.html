@@ -43,6 +43,12 @@
     ]);
     assert(skewed.trips[0].items[0].checked === true, 'later server-received click lost to a skewed device clock');
 
+    const migrated = tied.materialize([
+      { operationId: 'legacy-unsequenced', deviceId: 'old-desktop', clock: { ms: 9999999999999, counter: 0, deviceId: 'old-desktop' }, target, path: ['checked'], value: false, deleted: false },
+      { operationId: 'confirmed-new-click', deviceId: 'phone', clock: { ms: 1, counter: 0, deviceId: 'phone' }, target, path: ['checked'], value: true, deleted: false, serverSeq: 12 }
+    ]);
+    assert(migrated.trips[0].items[0].checked === true, 'unsequenced legacy row overwrote a confirmed click');
+
     // Deleting a checklist row must never turn into deletion of its parent trip.
     const rows = await create();
     const rowResult = rows.materialize([
@@ -60,7 +66,7 @@
       { operationId: 'legacy-snapshot', deviceId: 'desktop', clock: { ms: 999999, counter: 0, deviceId: 'desktop' }, target: 'snapshot', path: [], value: { trips: [{ id: 'trip-4', items: [{ gearId: 'gear-4', checked: false }] }] }, deleted: false, serverSeq: 2 }
     ]);
     assert(snapshotResult.trips[0].items[0].checked === true, 'legacy snapshot overwrote a granular checkbox change');
-    output.textContent = 'PASS: 5 sync race checks';
+    output.textContent = 'PASS: 6 sync race checks';
   } catch (error) {
     output.textContent = `FAIL: ${error.message}`;
     throw error;
