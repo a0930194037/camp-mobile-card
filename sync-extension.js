@@ -11,15 +11,26 @@
   };
   const sync = new CampSync(storage, 'camp-sync.v1');
   await sync.load();
+  await sync.backup(state);
   let applyingRemote = false;
+  let committing = Promise.resolve();
   let appliedInitialRemoteState = false;
   let currentStatus = sync.signedIn() ? '正在確認同步狀態' : '離線：尚未登入同步帳號';
   const nativeSave = store.save.bind(store);
   store.save = async function syncedSave() {
-    const before = structuredClone(sync.record.baseline ?? state);
-    if (!applyingRemote) sync.stampChanges(before, state);
-    await nativeSave();
-    if (!applyingRemote) sync.queue(before, state);
+    // Every existing UI handler reaches this one transaction boundary.  A
+    // serial queue avoids a rapid double click generating interleaved diffs.
+    const commit = async () => {
+      await nativeSave();
+      if (!applyingRemote) sync.queue(state);
+    };
+    committing = committing.then(commit, commit);
+    return committing;
+  };
+  globalThis.commitMutation = async function commitMutation(mutator) {
+    const run = async () => { await mutator(); await nativeSave(); if (!applyingRemote) sync.queue(state); };
+    committing = committing.then(run, run);
+    return committing;
   };
 
   const light = document.createElement('button');

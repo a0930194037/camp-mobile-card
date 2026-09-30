@@ -1,38 +1,237 @@
-/* Sync v3 — per-operation, per-field offline synchronisation. */
+/* Sync v4 — operation based, offline-first synchronisation. */
 (function () {
-  const config=globalThis.CAMP_SYNC_CONFIG, hasConfig=!!(config?.url&&config?.publishableKey);
-  const clone=v=>v==null?v:structuredClone(v), same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-  const uid=()=>crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;
-  const collections=['gear','recipes','trips','logs','discardedTrips','tripTombstones'];
-  const entityId=(v,i)=>String(v?.id??v?.tripId??v?.code??`index:${i}`);
-  const syncable=v=>{const n=clone(v||{});['page','pendingDeleteTripId','pendingPurgeId'].forEach(k=>delete n[k]);return n;};
-  const cmp=(a,b)=>{if(!b)return 1;if(!a)return-1;for(const k of ['ms','counter']){const d=Number(a[k]||0)-Number(b[k]||0);if(d)return d;}return String(a.deviceId||'').localeCompare(String(b.deviceId||''));};
-  const rowId=(field,v,i)=>field==='items'?String(v?.gearId??v?.id??`index:${i}`):String(v?.shoppingKey??v?.id??`${v?.recipeId||''}:${v?.name||''}:${i}`);
-  const clockKey=(target,path)=>`${target}/${path.map(encodeURIComponent).join('/')}`;
-  const applyLegacy=(base,batches)=>{const result=clone(base||{});for(const batch of batches||[])for(const change of batch.changes||[]){const path=change.path||[];if(!path.length){if(!change.deleted)return clone(change.value);continue;}let at=result;path.slice(0,-1).forEach(key=>at=at[key]??={});if(change.deleted)delete at[path[path.length-1]];else at[path[path.length-1]]=clone(change.value);}return result;};
+  const config = globalThis.CAMP_SYNC_CONFIG;
+  const hasConfig = !!(config?.url && config?.publishableKey);
+  const clone = value => value == null ? value : structuredClone(value);
+  const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+  const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  const collections = ['gear', 'recipes', 'trips', 'logs', 'discardedTrips', 'tripTombstones'];
+  const entityId = (value, index) => String(value?.id ?? value?.tripId ?? value?.code ?? `index:${index}`);
+  const rowId = (field, value, index) => field === 'items'
+    ? String(value?.gearId ?? value?.id ?? `index:${index}`)
+    : String(value?.shoppingKey ?? value?.id ?? `${value?.recipeId || ''}:${value?.name || ''}:${index}`);
+  const syncable = value => {
+    const next = clone(value || {});
+    ['page', 'pendingDeleteTripId', 'pendingPurgeId'].forEach(key => delete next[key]);
+    return next;
+  };
+  const cmp = (left, right) => {
+    if (!right) return 1;
+    if (!left) return -1;
+    for (const key of ['ms', 'counter']) {
+      const delta = Number(left[key] || 0) - Number(right[key] || 0);
+      if (delta) return delta;
+    }
+    return String(left.deviceId || '').localeCompare(String(right.deviceId || ''));
+  };
+  const clockKey = (target, path) => `${target}/${path.map(encodeURIComponent).join('/')}`;
+  const legacyApply = (base, batches) => {
+    let result = clone(base || {});
+    for (const batch of batches || []) for (const change of batch.changes || []) {
+      const path = change.path || [];
+      if (!path.length) { if (!change.deleted) result = clone(change.value); continue; }
+      let at = result;
+      path.slice(0, -1).forEach(key => at = at[key] ?? {});
+      if (change.deleted) delete at[path[path.length - 1]];
+      else at[path[path.length - 1]] = clone(change.value);
+    }
+    return result;
+  };
+  const newer = (left, right) => String(left?.updatedAt || left?.createdAt || '') >= String(right?.updatedAt || right?.createdAt || '') ? left : right;
+  const mergeLegacy = (remote, local) => {
+    const result = { ...(clone(remote || {})), ...(clone(local || {})) };
+    for (const collection of collections) {
+      const all = new Map();
+      for (const source of [remote?.[collection] || [], local?.[collection] || []]) for (const value of source) {
+        const id = entityId(value, 0); const previous = all.get(id);
+        all.set(id, previous ? clone(newer(value, previous)) : clone(value));
+      }
+      result[collection] = [...all.values()];
+    }
+    return result;
+  };
+
   class CampSync {
-    constructor(storage,key='camp-sync.v1'){this.storage=storage;this.key=key;this.deviceId=uid();this.timer=null;this.running=false;this.record={session:null,deviceId:this.deviceId,clock:{ms:0,counter:0},pending:[],known:[],snapshot:null,syncVersion:3};this.onStatus=()=>{};this.onQueue=()=>{};}
-    async load(){const old=await this.storage.get(this.key)||{};this.record={...this.record,...old,syncVersion:3};const legacy=(this.record.pending||[]).filter(op=>!(op?.operationId&&op?.target));if(legacy.length)this.record.legacyPendingBackup??=legacy;this.record.pending=(this.record.pending||[]).filter(op=>op?.operationId&&op?.target);this.record.known=(this.record.known||[]).filter(op=>op?.operationId&&op?.target);this.record.snapshot=this.record.snapshot||null;this.deviceId=this.record.deviceId||this.deviceId;this.record.deviceId=this.deviceId;await this.persist();return this.record;}
-    async persist(){await this.storage.set(this.key,this.record);} signedIn(){return!!this.record.session?.access_token;}
-    headers(extra={}){const token=this.record.session?.access_token;return{apikey:config.publishableKey,Authorization:`Bearer ${token||config.publishableKey}`,'Content-Type':'application/json',...extra};}
-    async request(path,options={}){const r=await fetch(`${config.url}${path}`,{...options,cache:'no-store',headers:this.headers(options.headers)});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.message||d.error_description||d.error||`同步服務錯誤 (${r.status})`);}return r.status===204?null:r.json();}
-    async authRequest(path,options={}){const r=await fetch(`${config.url}${path}`,{...options,headers:{apikey:config.publishableKey,'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.message||d.error_description||d.error||`登入服務錯誤 (${r.status})`);}return r.status===204?null:r.json();}
-    async signUp(email,password){const d=await this.authRequest('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password})});if(!d.session)throw new Error('帳號已建立；請先完成 Email 驗證。');this.record.session=d.session;await this.persist();return d;}
-    async signIn(email,password){const d=await this.authRequest('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});this.record.session=d;await this.persist();return d;}
-    async resendVerification(email){await this.authRequest('/auth/v1/resend',{method:'POST',body:JSON.stringify({type:'signup',email})});}
-    async signOut(){await this.request('/auth/v1/logout',{method:'POST'}).catch(()=>{});this.record.session=null;await this.persist();}
-    async refresh(){try{const t=this.record.session?.refresh_token;if(!t)return false;this.record.session=await this.authRequest('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:t})});await this.persist();return true;}catch{return false;}}
-    needsRefresh(){return Number(this.record.session?.expires_at||0)<=Math.floor(Date.now()/1000)+60;}
-    nextClock(){const old=this.record.clock||{},ms=Math.max(Date.now(),Number(old.ms||0)),counter=ms===Number(old.ms||0)?Number(old.counter||0)+1:0;return this.record.clock={ms,counter};}
-    op(target,path,value,deleted=false){const c=this.nextClock();return{operationId:uid(),deviceId:this.deviceId,clock:{...c,deviceId:this.deviceId},occurredAt:new Date(c.ms).toISOString(),target,path,value:clone(value),deleted};}
-    walk(before,after,target,path,ops){if(same(before,after))return;const obj=v=>v&&typeof v==='object'&&!Array.isArray(v);if(obj(before)&&obj(after)){new Set([...Object.keys(before),...Object.keys(after)]).forEach(k=>this.walk(before[k],after[k],target,[...path,k],ops));}else ops.push(this.op(target,path,after,after===undefined));}
-    entity(before,after,collection,itemId,ops){if(after===undefined){ops.push(this.op(`entity:${collection}:${itemId}`,[],null,true));return;}const old=before||{};if(collection==='trips'){for(const field of ['items','shopping']){const a=new Map((old[field]||[]).map((v,i)=>[rowId(field,v,i),v])),b=new Map((after[field]||[]).map((v,i)=>[rowId(field,v,i),v]));new Set([...a.keys(),...b.keys()]).forEach(k=>this.walk(a.get(k),b.get(k),`row:trips:${itemId}:${field}:${k}`,[],ops));}const a={...old},b={...after};delete a.items;delete a.shopping;this.walk(a,b,`entity:${collection}:${itemId}`,[],ops);return;}this.walk(old,after,`entity:${collection}:${itemId}`,[],ops);}
-    build(before,after){if(before==null)return[this.op('snapshot',[],after)];const ops=[];for(const c of collections){const a=new Map((before[c]||[]).map((v,i)=>[entityId(v,i),v])),b=new Map((after[c]||[]).map((v,i)=>[entityId(v,i),v]));new Set([...a.keys(),...b.keys()]).forEach(k=>this.entity(a.get(k),b.get(k),c,k,ops));}const a=clone(before),b=clone(after);collections.forEach(k=>{delete a[k];delete b[k];});this.walk(a,b,'state',[],ops);return ops;}
-    apply(bundle,op){const meta=bundle.meta||(bundle.meta={clocks:{},tombstones:{}}),data=bundle.data||(bundle.data={}),t=op.target,dead=meta.tombstones[t];if(op.deleted&&(!dead||cmp(op.clock,dead)>0))meta.tombstones[t]=op.clock;if(!op.deleted&&dead&&cmp(op.clock,dead)>0)delete meta.tombstones[t];if(!op.deleted&&meta.tombstones[t]&&cmp(op.clock,meta.tombstones[t])<=0)return;const ck=clockKey(t,op.path||[]);if(cmp(op.clock,meta.clocks[ck])<=0)return;meta.clocks[ck]=op.clock;if(t==='snapshot'){if(!bundle.seed||cmp(op.clock,bundle.seed)>0){bundle.data=clone(op.value||{});bundle.seed=op.clock;}return;}const parts=t.split(':');let root=data;if(parts[0]!=='state'){const[,c,parent,field,row]=parts;data[c]??=[];let e=data[c].find((v,i)=>entityId(v,i)===parent);if(!e&&!op.deleted){e={id:parent};data[c].push(e);}if(!e)return;if(field){e[field]??=[];let r=e[field].find((v,i)=>rowId(field,v,i)===row);if(!r&&!op.deleted){r=field==='items'?{gearId:row}:{shoppingKey:row};e[field].push(r);}root=r;}else root=e;if(op.deleted&&!(op.path||[]).length){const i=data[c].indexOf(e);if(i>=0)data[c].splice(i,1);return;}}if(!root)return;const p=op.path||[];if(!p.length){if(!op.deleted&&op.value&&typeof op.value==='object')Object.assign(root,clone(op.value));return;}let at=root;p.slice(0,-1).forEach(k=>at=at[k]??={});if(op.deleted)delete at[p[p.length-1]];else at[p[p.length-1]]=clone(op.value);}
-    materialize(ops){const b={data:{},meta:{clocks:{},tombstones:{}}};[...ops].sort((a,b)=>cmp(a.clock,b.clock)||String(a.operationId).localeCompare(String(b.operationId))).forEach(op=>this.apply(b,op));return syncable(b.data);}
-    stampChanges(){} compactPending(){const latest=new Map();for(const op of this.record.pending){const key=`${op.target}/${(op.path||[]).join('/')}`;if(op.deleted&&!(op.path||[]).length){for(const prior of [...latest.keys()])if(prior.startsWith(`${op.target}/`))latest.delete(prior);}latest.set(key,op);}this.record.pending=[...latest.values()].sort((a,b)=>cmp(a.clock,b.clock));} queue(before,after){const next=syncable(after),prior=this.record.snapshot==null?syncable(before):this.record.snapshot,ops=this.build(prior,next);if(!ops.length)return;this.record.pending.push(...ops);this.compactPending();this.record.snapshot=next;this.persist();this.onStatus('已離線儲存，等待同步');clearTimeout(this.timer);this.timer=setTimeout(()=>Promise.resolve(this.onQueue()).catch(()=>{}),100);}
-    async exchange(ops,document){const rows=await this.request('/rest/v1/rpc/sync_camp_operations',{method:'POST',body:JSON.stringify({p_operations:ops,p_materialized:ops.length?document:null})});return Array.isArray(rows)?rows[0]:rows;}
-    async sync(getState,replaceState){if(!hasConfig||!this.signedIn()||this.running||!navigator.onLine)return false;this.running=true;try{if(this.needsRefresh()&&!(await this.refresh()))throw new Error('登入已過期，請在設定重新登入');const local=syncable(getState()),sent=[...this.record.pending],sentIds=new Set(sent.map(op=>op.operationId));let reply=await this.exchange(sent,local),remote=reply?.operations||[];if(!remote.length){const remoteState=reply?.data&&Object.keys(reply.data).length?reply.data:local;const seedState=this.record.legacyPendingBackup?.length?applyLegacy(remoteState,this.record.legacyPendingBackup):remoteState,seed=this.op('snapshot',[],seedState);reply=await this.exchange([seed,...sent],local);remote=reply?.operations||[];sentIds.add(seed.operationId);}const unsent=this.record.pending.filter(op=>!sentIds.has(op.operationId));const all=new Map([...this.record.known,...remote,...unsent].map(x=>[x.operationId,x]));const result=this.materialize([...all.values()]);result.syncFormat=3;replaceState(result);this.record.known=[...new Map([...this.record.known,...remote].map(x=>[x.operationId,x])).values()];this.record.pending=unsent;this.record.snapshot=result;await this.persist();this.onStatus(unsent.length?'已儲存，等待下一次同步':'已同步');if(unsent.length)clearTimeout(this.timer),this.timer=setTimeout(()=>Promise.resolve(this.onQueue()).catch(()=>{}),100);return true;}catch(e){if(/(401|jwt expired|expired|invalid jwt)/i.test(e.message)&&await this.refresh()){this.running=false;return this.sync(getState,replaceState);}this.onStatus(`等待同步：${e.message}`);return false;}finally{this.running=false;}}
+    constructor(storage, key = 'camp-sync.v1') {
+      this.storage = storage; this.key = key; this.deviceId = uid(); this.timer = null; this.running = false;
+      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, pending: [], known: [], snapshot: null, syncVersion: 4, backups: [] };
+      this.onStatus = () => {}; this.onQueue = () => {};
+    }
+    async load() {
+      const old = await this.storage.get(this.key) || {};
+      this.record = { ...this.record, ...old, syncVersion: 4 };
+      const legacy = (this.record.pending || []).filter(op => !(op?.operationId && op?.target));
+      if (legacy.length) this.record.legacyPendingBackup ??= legacy;
+      this.record.pending = (this.record.pending || []).filter(op => op?.operationId && op?.target);
+      this.record.known = (this.record.known || []).filter(op => op?.operationId && op?.target);
+      this.record.backups ??= [];
+      this.deviceId = this.record.deviceId || this.deviceId; this.record.deviceId = this.deviceId;
+      await this.persist(); return this.record;
+    }
+    async persist() { await this.storage.set(this.key, this.record); }
+    async backup(state) {
+      if (this.record.migratedToV4) return;
+      this.record.backups.push({ createdAt: new Date().toISOString(), state: syncable(state) });
+      this.record.backups = this.record.backups.slice(-3);
+      this.record.migratedToV4 = true;
+      await this.persist();
+    }
+    signedIn() { return !!this.record.session?.access_token; }
+    headers(extra = {}) { const token = this.record.session?.access_token; return { apikey: config.publishableKey, Authorization: `Bearer ${token || config.publishableKey}`, 'Content-Type': 'application/json', ...extra }; }
+    async request(path, options = {}) {
+      const response = await fetch(`${config.url}${path}`, { ...options, cache: 'no-store', headers: this.headers(options.headers) });
+      if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.message || detail.error_description || detail.error || `同步服務錯誤 (${response.status})`); }
+      return response.status === 204 ? null : response.json();
+    }
+    async authRequest(path, options = {}) {
+      const response = await fetch(`${config.url}${path}`, { ...options, headers: { apikey: config.publishableKey, 'Content-Type': 'application/json', ...(options.headers || {}) } });
+      if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.message || detail.error_description || detail.error || `帳號服務錯誤 (${response.status})`); }
+      return response.status === 204 ? null : response.json();
+    }
+    async signUp(email, password) { const data = await this.authRequest('/auth/v1/signup', { method: 'POST', body: JSON.stringify({ email, password }) }); if (!data.session) throw new Error('帳號已建立；請完成 Email 驗證後再登入。'); this.record.session = data.session; await this.persist(); return data; }
+    async signIn(email, password) { this.record.session = await this.authRequest('/auth/v1/token?grant_type=password', { method: 'POST', body: JSON.stringify({ email, password }) }); await this.persist(); return this.record.session; }
+    async resendVerification(email) { await this.authRequest('/auth/v1/resend', { method: 'POST', body: JSON.stringify({ type: 'signup', email }) }); }
+    async signOut() { await this.request('/auth/v1/logout', { method: 'POST' }).catch(() => {}); this.record.session = null; await this.persist(); }
+    async refresh() { try { const token = this.record.session?.refresh_token; if (!token) return false; this.record.session = await this.authRequest('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: token }) }); await this.persist(); return true; } catch { return false; } }
+    needsRefresh() { return Number(this.record.session?.expires_at || 0) <= Math.floor(Date.now() / 1000) + 60; }
+    nextClock() { const old = this.record.clock || {}; const ms = Math.max(Date.now(), Number(old.ms || 0)); const counter = ms === Number(old.ms || 0) ? Number(old.counter || 0) + 1 : 0; return this.record.clock = { ms, counter }; }
+    op(target, path, value, deleted = false) { const clock = this.nextClock(); return { operationId: uid(), deviceId: this.deviceId, clock: { ...clock, deviceId: this.deviceId }, occurredAt: new Date(clock.ms).toISOString(), target, path, value: clone(value), deleted }; }
+    walk(before, after, target, path, output) {
+      if (same(before, after)) return;
+      const object = value => value && typeof value === 'object' && !Array.isArray(value);
+      if (object(before) && object(after)) new Set([...Object.keys(before), ...Object.keys(after)]).forEach(key => this.walk(before[key], after[key], target, [...path, key], output));
+      else output.push(this.op(target, path, after, after === undefined));
+    }
+    entity(before, after, collection, id, output) {
+      const target = `entity:${collection}:${id}`;
+      if (after === undefined) { output.push(this.op(target, [], null, true)); return; }
+      const old = before || {};
+      if (collection === 'trips') {
+        for (const field of ['items', 'shopping']) {
+          const oldRows = new Map((old[field] || []).map((value, index) => [rowId(field, value, index), value]));
+          const newRows = new Map((after[field] || []).map((value, index) => [rowId(field, value, index), value]));
+          new Set([...oldRows.keys(), ...newRows.keys()]).forEach(row => this.walk(oldRows.get(row), newRows.get(row), `row:trips:${id}:${field}:${row}`, [], output));
+        }
+        const oldOverrides = old.overrides || { added: [], removed: [] };
+        const newOverrides = after.overrides || { added: [], removed: [] };
+        const oldAdded = new Map((oldOverrides.added || []).map(entry => [String(entry.gearId), entry]));
+        const newAdded = new Map((newOverrides.added || []).map(entry => [String(entry.gearId), entry]));
+        new Set([...oldAdded.keys(), ...newAdded.keys()]).forEach(gearId => this.walk(oldAdded.get(gearId), newAdded.get(gearId), `override:trips:${id}:added:${gearId}`, [], output));
+        const oldRemoved = new Set(oldOverrides.removed || []), newRemoved = new Set(newOverrides.removed || []);
+        new Set([...oldRemoved, ...newRemoved]).forEach(gearId => {
+          if (oldRemoved.has(gearId) !== newRemoved.has(gearId)) output.push(this.op(`override:trips:${id}:removed:${gearId}`, [], true, !newRemoved.has(gearId)));
+        });
+        const oldEntity = { ...old }, newEntity = { ...after };
+        delete oldEntity.items; delete oldEntity.shopping; delete oldEntity.overrides;
+        delete newEntity.items; delete newEntity.shopping; delete newEntity.overrides;
+        this.walk(oldEntity, newEntity, target, [], output); return;
+      }
+      this.walk(old, after, target, [], output);
+    }
+    build(before, after) {
+      if (before == null) return [this.op('snapshot', [], after)];
+      const output = [];
+      for (const collection of collections) {
+        const oldItems = new Map((before[collection] || []).map((value, index) => [entityId(value, index), value]));
+        const newItems = new Map((after[collection] || []).map((value, index) => [entityId(value, index), value]));
+        new Set([...oldItems.keys(), ...newItems.keys()]).forEach(id => this.entity(oldItems.get(id), newItems.get(id), collection, id, output));
+      }
+      const oldState = clone(before), newState = clone(after);
+      collections.forEach(key => { delete oldState[key]; delete newState[key]; });
+      this.walk(oldState, newState, 'state', [], output); return output;
+    }
+    apply(bundle, operation) {
+      const meta = bundle.meta ||= { clocks: {}, tombstones: {} }; const data = bundle.data ||= {};
+      const target = operation.target; const path = operation.path || []; const tombstone = meta.tombstones[target];
+      if (operation.deleted && (!tombstone || cmp(operation.clock, tombstone) > 0)) meta.tombstones[target] = operation.clock;
+      if (!operation.deleted && tombstone && cmp(operation.clock, tombstone) > 0) delete meta.tombstones[target];
+      if (!operation.deleted && meta.tombstones[target] && cmp(operation.clock, meta.tombstones[target]) <= 0) return;
+      const key = clockKey(target, path);
+      if (cmp(operation.clock, meta.clocks[key]) <= 0) return;
+      meta.clocks[key] = operation.clock;
+      if (target === 'snapshot') { if (!bundle.seed || cmp(operation.clock, bundle.seed) > 0) { bundle.data = clone(operation.value || {}); bundle.seed = operation.clock; } return; }
+      if (target === 'state') { this.applyAt(data, path, operation); return; }
+      const parts = target.split(':'); const kind = parts[0]; const collection = parts[1]; const parent = parts[2];
+      data[collection] ??= [];
+      let entity = data[collection].find((value, index) => entityId(value, index) === parent);
+      if (kind === 'override') {
+        const field = parts[3], row = parts.slice(4).join(':');
+        if (!entity) { if (operation.deleted) return; entity = { id: parent }; data[collection].push(entity); }
+        entity.overrides ??= { added: [], removed: [] }; entity.overrides.added ??= []; entity.overrides.removed ??= [];
+        if (field === 'removed') {
+          entity.overrides.removed = entity.overrides.removed.filter(value => value !== row);
+          if (!operation.deleted) entity.overrides.removed.push(row);
+          return;
+        }
+        let value = entity.overrides.added.find(entry => String(entry.gearId) === row);
+        if (operation.deleted && !path.length) { if (value) entity.overrides.added.splice(entity.overrides.added.indexOf(value), 1); return; }
+        if (!value) { value = { gearId: row }; entity.overrides.added.push(value); }
+        this.applyAt(value, path, operation); return;
+      }
+      if (kind === 'entity') {
+        if (operation.deleted && !path.length) { if (entity) data[collection].splice(data[collection].indexOf(entity), 1); return; }
+        if (!entity) { entity = { id: parent }; data[collection].push(entity); }
+        this.applyAt(entity, path, operation); return;
+      }
+      const field = parts[3]; const row = parts.slice(4).join(':');
+      if (!entity) { if (operation.deleted) return; entity = { id: parent }; data[collection].push(entity); }
+      entity[field] ??= [];
+      let value = entity[field].find((entry, index) => rowId(field, entry, index) === row);
+      if (operation.deleted && !path.length) { if (value) entity[field].splice(entity[field].indexOf(value), 1); return; }
+      if (!value) { value = field === 'items' ? { gearId: row } : { shoppingKey: row }; entity[field].push(value); }
+      this.applyAt(value, path, operation);
+    }
+    applyAt(root, path, operation) {
+      if (!path.length) { if (!operation.deleted && operation.value && typeof operation.value === 'object') Object.assign(root, clone(operation.value)); return; }
+      let at = root; path.slice(0, -1).forEach(key => at = at[key] ?? {});
+      if (operation.deleted) delete at[path[path.length - 1]]; else at[path[path.length - 1]] = clone(operation.value);
+    }
+    materialize(operations) { const bundle = { data: {}, meta: { clocks: {}, tombstones: {} } }; [...operations].sort((a, b) => cmp(a.clock, b.clock) || String(a.operationId).localeCompare(String(b.operationId))).forEach(op => this.apply(bundle, op)); return syncable(bundle.data); }
+    compactPending() {
+      const latest = new Map();
+      for (const operation of this.record.pending) {
+        const key = `${operation.target}/${(operation.path || []).join('/')}`;
+        if (operation.deleted && !(operation.path || []).length) for (const prior of [...latest.keys()]) if (prior.startsWith(`${operation.target}/`)) latest.delete(prior);
+        latest.set(key, operation);
+      }
+      this.record.pending = [...latest.values()].sort((left, right) => cmp(left.clock, right.clock));
+    }
+    queue(after) {
+      const next = syncable(after); const prior = this.record.snapshot;
+      const operations = this.build(prior, next); if (!operations.length) return false;
+      this.record.pending.push(...operations); this.compactPending(); this.record.snapshot = next; this.persist();
+      this.onStatus('已離線儲存，等待同步'); clearTimeout(this.timer);
+      this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); return true;
+    }
+    async exchange(operations, initialDocument = null) { const rows = await this.request('/rest/v1/rpc/sync_camp_operations', { method: 'POST', body: JSON.stringify({ p_operations: operations, p_materialized: initialDocument }) }); return Array.isArray(rows) ? rows[0] : rows; }
+    async sync(getState, replaceState) {
+      if (!hasConfig || !this.signedIn() || this.running || !navigator.onLine) return false;
+      this.running = true;
+      try {
+        if (this.needsRefresh() && !(await this.refresh())) throw new Error('登入已過期，請在設定重新登入');
+        const sent = [...this.record.pending]; const sentIds = new Set(sent.map(operation => operation.operationId));
+        let reply = await this.exchange(sent); let remote = reply?.operations || [];
+        if (!remote.length) {
+          const current = syncable(getState());
+          const local = this.record.legacyPendingBackup?.length ? legacyApply(current, this.record.legacyPendingBackup) : current;
+          const seedState = mergeLegacy(reply?.data, local);
+          const seed = this.op('snapshot', [], seedState);
+          reply = await this.exchange([seed, ...sent], seedState); remote = reply?.operations || []; sentIds.add(seed.operationId);
+        }
+        const unsent = this.record.pending.filter(operation => !sentIds.has(operation.operationId));
+        const all = new Map([...this.record.known, ...remote, ...unsent].map(operation => [operation.operationId, operation]));
+        const result = this.materialize([...all.values()]); result.syncFormat = 4;
+        replaceState(result);
+        this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()];
+        this.record.pending = unsent; this.record.snapshot = result; this.record.legacyPendingBackup = null;
+        await this.persist(); this.onStatus(unsent.length ? '已儲存，等待下一次同步' : '已同步');
+        if (unsent.length) { clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); }
+        return true;
+      } catch (error) {
+        if (/(401|jwt expired|expired|invalid jwt)/i.test(error.message) && await this.refresh()) { this.running = false; return this.sync(getState, replaceState); }
+        this.onStatus(`等待同步：${error.message}`); return false;
+      } finally { this.running = false; }
+    }
   }
-  globalThis.CampSync=CampSync;
+  globalThis.CampSync = CampSync;
 })();

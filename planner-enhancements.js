@@ -5,8 +5,8 @@ const originalRender = render;
 const originalAction = action;
 const originalDialog = dialog;
 const originalBuildTripItems = buildTripItems;
-// Mobile opens directly on the 行程 tab; the overview remains available from
-// the card's「所有行程」action rather than replacing the first screen.
+// Always open the side panel on the active 行程 tab.  The overview remains a
+// deliberate destination through「所有行程」instead of a restored page state.
 let homeOpened = true;
 
 function dateCode(date) {
@@ -103,7 +103,8 @@ function normalizeTripCodes() {
       if (trip.code !== code) { trip.code = code; changed = true; }
     });
   });
-  if (changed) setTimeout(() => store.save(), 0);
+  // Rendering may normalize legacy display fields, but must never create a
+  // background sync operation that can overwrite a real user action.
 }
 
 function promoteTripActions() {
@@ -205,13 +206,11 @@ render = function () {
         .localeCompare(String(left.lastOpenedAt || left.updatedAt || left.createdAt || '')))[0];
     if (recentTrip) {
       state.activeTripId = recentTrip.id;
-      setTimeout(() => store.save(), 0);
     }
   }
   if (!homeOpened && state.page === 'trips') {
     state.page = 'home';
     homeOpened = true;
-    setTimeout(() => store.save(), 0);
   }
 
   if (state.page === 'cancelled') return renderCancelledTrips();
@@ -826,7 +825,7 @@ function decorateTripDetails() {
       tripData.updatedAt = now();
       changed = true;
     }
-    if (changed) setTimeout(() => store.save(), 0);
+    // Planning upgrades are persisted by the next explicit user mutation.
   }
 
   drawCard = function drawPlannerCard(tripData) {
@@ -1149,7 +1148,7 @@ function normalizeRecipeClassification() {
       changed = true;
     }
   });
-  if (changed) setTimeout(() => store.save(), 0);
+  // Classification defaults are presentation migration only; do not save from render.
 }
 
 let recipeTypeFilter = 'all';
@@ -1411,6 +1410,7 @@ render = function renderWithSettingsAndIllustrations() {
 addToTripDialog = function filteredAddToTripDialog() {
   const currentTrip = trip();
   if (!currentTrip) return;
+  const tripId = currentTrip.id;
   let filter = 'all';
   const dialogRoot = dialog(`<h2>手動加入裝備</h2><div class="gear-filter manual-gear-filter"><label for="manual-gear-filter">顯示分類</label><select id="manual-gear-filter"><option value="all">全部裝備</option><option value="favorite">★ 我的最愛</option>${categories.map(category => `<option value="${esc(category)}">${esc(category)}</option>`).join('')}</select></div><p id="manual-gear-count" class="sub"></p><div id="manual-gear-list" class="list"></div><div class="actions"><button class="primary" id="add-items">加入</button><button class="secondary" id="cancel">取消</button></div>`);
   const availableGear = () => state.gear
@@ -1427,16 +1427,27 @@ addToTripDialog = function filteredAddToTripDialog() {
   $('#manual-gear-filter', dialogRoot).addEventListener('change', event => { filter = event.target.value; drawAvailable(); });
   $('#cancel', dialogRoot).onclick = closeDialog;
   $('#add-items', dialogRoot).onclick = async () => {
-    $$('input:checked', $('#manual-gear-list', dialogRoot)).forEach(input => {
-      const gear = gearById(input.value);
-      if (!gear || currentTrip.items.some(entry => entry.gearId === gear.id)) return;
-      const entry = item(gear.id, '手動加入');
-      entry.manual = true;
-      currentTrip.items.push(entry);
-      currentTrip.overrides.added.push(entry);
-      currentTrip.overrides.removed = currentTrip.overrides.removed.filter(id => id !== gear.id);
+    const button = $('#add-items', dialogRoot);
+    if (button.disabled) return;
+    button.disabled = true;
+    await commitMutation(async () => {
+      const writableTrip = state.trips.find(entry => entry.id === tripId);
+      if (!writableTrip) return;
+      writableTrip.items ??= [];
+      writableTrip.overrides ??= { added: [], removed: [] };
+      writableTrip.overrides.added ??= [];
+      writableTrip.overrides.removed ??= [];
+      $$('input:checked', $('#manual-gear-list', dialogRoot)).forEach(input => {
+        const gear = gearById(input.value);
+        if (!gear || writableTrip.items.some(entry => entry.gearId === gear.id)) return;
+        const entry = item(gear.id, '手動加入');
+        entry.manual = true;
+        writableTrip.items.push(entry);
+        if (!writableTrip.overrides.added.some(itemData => itemData.gearId === gear.id)) writableTrip.overrides.added.push(structuredClone(entry));
+        writableTrip.overrides.removed = writableTrip.overrides.removed.filter(id => id !== gear.id);
+      });
+      writableTrip.updatedAt = now();
     });
-    await store.save();
     closeDialog();
     render();
   };
@@ -1619,21 +1630,3 @@ const mobileCardRender = render;
 render = function renderWithMobileCardControls() {
   mobileCardRender();
 };
-
-// localStorage resolves before this enhancement finishes loading on iOS Safari.
-// Repaint once after all classic scripts have loaded, so the first visible
-// screen is the desktop-equivalent tent overview rather than core's fallback.
-(() => {
-  let retries = 0;
-  const openTentOverview = () => {
-    try {
-      if (!state) throw new Error('planner state is not ready');
-      state.page = 'home';
-      window.__campInitialViewSet = true;
-      render();
-    } catch {
-      if (retries++ < 20) setTimeout(openTentOverview, 25);
-    }
-  };
-  setTimeout(openTentOverview, 0);
-})();
