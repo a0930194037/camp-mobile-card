@@ -12,6 +12,16 @@
   const sync = new CampSync(storage, 'camp-sync.v1');
   await sync.load();
   await sync.backup(state);
+  // Never turn the initial UI render into a write.  A mobile card can reopen
+  // with an older local cache while camp-sync already knows newer remote
+  // checklist values. Establishing a baseline first lets the first pull
+  // replace that cache instead of uploading it.
+  if (!sync.record.snapshot) {
+    const baseline = structuredClone(state);
+    ['page', 'pendingDeleteTripId', 'pendingPurgeId'].forEach(key => delete baseline[key]);
+    sync.record.snapshot = baseline;
+    await sync.persist();
+  }
   let applyingRemote = false;
   let committing = Promise.resolve();
   let pendingCommitCount = 0;
