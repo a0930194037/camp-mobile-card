@@ -128,6 +128,6 @@
   placeSyncLight();
   if (sync.signedIn()) {
     await runSync();
-    setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 2000);
+    setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 1000);
   }
 })();
