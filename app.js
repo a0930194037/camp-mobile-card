@@ -132,5 +132,5 @@ async function exportCheckin() {
 ['card-file', 'replace-file'].forEach(id => $("#" + id).onchange = async event => { const file = event.target.files?.[0]; if (!file) return; try { await loadCard(file); } catch (error) { $('#status').textContent = `匯入失敗：${error.message}`; } });
 $('#export').onclick = exportCheckin;
 try { const saved = JSON.parse(localStorage.getItem(DB_KEY)); if (saved?.card && saved?.sourceSnapshot) { card = saved.card; sourceSnapshot = saved.sourceSnapshot; } else localStorage.removeItem(DB_KEY); } catch { localStorage.removeItem(DB_KEY); }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
 render();
