@@ -35,6 +35,9 @@
     if (leftReceipt && rightReceipt) return leftReceipt - rightReceipt
       || leftSeq - rightSeq
       || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
+    // Early v5 responses already carried server_seq but not received_at.
+    // Preserve their deterministic server ordering during that migration.
+    if (leftSeq && rightSeq && leftSeq !== rightSeq) return leftSeq - rightSeq;
     return cmp(left?.clock, right?.clock)
       || leftSeq - rightSeq
       || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
