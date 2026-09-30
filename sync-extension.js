@@ -47,7 +47,7 @@
     const online = text === '已同步';
     const offline = text.startsWith('等待同步') || text.includes('尚未登入') || text.includes('離線');
     light.className = `camp-sync-light ${online ? 'is-online' : offline ? 'is-offline' : 'is-syncing'}`;
-    light.title = '長按查看同步狀態；點一下開啟設定';
+    light.title = '長按查看同步狀態';
     light.setAttribute('aria-label', text);
   }
   sync.onStatus = setStatus;
