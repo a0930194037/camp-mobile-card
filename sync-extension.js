@@ -12,6 +12,7 @@
   const sync = new CampSync(storage, 'camp-sync.v1');
   await sync.load();
   let applyingRemote = false;
+  let appliedInitialRemoteState = false;
   let currentStatus = sync.signedIn() ? '正在確認同步狀態' : '離線：尚未登入同步帳號';
   const nativeSave = store.save.bind(store);
   store.save = async function syncedSave() {
@@ -55,7 +56,19 @@
   async function replaceState(next) {
     if (!next || typeof next !== 'object') return;
     applyingRemote = true;
-    try { state = { ...next, page: 'home' }; await nativeSave(); render(); }
+    try {
+      // Sync data, not navigation. Retain the current screen and selection so
+      // a completed background sync never interrupts a checklist or editor.
+      const view = {
+        page: state.page,
+        activeTripId: state.activeTripId,
+        pendingDeleteTripId: state.pendingDeleteTripId,
+        pendingPurgeId: state.pendingPurgeId
+      };
+      state = { ...next, ...view };
+      await nativeSave();
+      if (!appliedInitialRemoteState) { appliedInitialRemoteState = true; render(); }
+    }
     finally { applyingRemote = false; }
   }
   async function runSync() {
