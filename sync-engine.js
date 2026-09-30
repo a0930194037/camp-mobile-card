@@ -24,18 +24,19 @@
     }
     return String(left.deviceId || '').localeCompare(String(right.deviceId || ''));
   };
-  // Once both operations have reached Supabase, its receipt sequence is the
-  // shared clock. A phone and a PC cannot agree on wall clocks, so a skewed
-  // device must never let an old change defeat a later click. Before receipt,
-  // HLC still orders offline work and protects the local intent.
+  // Once both operations have reached Supabase, received_at is the shared
+  // clock. Phones and PCs cannot agree on wall clocks, so a skewed device
+  // must never let an old change defeat a later click. server_seq settles the
+  // rare same-millisecond tie. Before receipt, HLC orders offline work.
   const compareOperations = (left, right) => {
     const leftSeq = Number(left?.serverSeq || 0), rightSeq = Number(right?.serverSeq || 0);
-    // A sequenced operation is newer-format server-confirmed data. It must
-    // also win over pre-sequence legacy rows, whose device clock may be far in
-    // the future. That closes the last migration path which could undo a tick.
-    if (leftSeq || rightSeq) return leftSeq - rightSeq
+    const leftReceipt = Date.parse(left?.serverReceivedAt || '') || 0;
+    const rightReceipt = Date.parse(right?.serverReceivedAt || '') || 0;
+    if (leftReceipt && rightReceipt) return leftReceipt - rightReceipt
+      || leftSeq - rightSeq
       || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
     return cmp(left?.clock, right?.clock)
+      || leftSeq - rightSeq
       || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
   };
   const clockKey = (target, path) => `${target}/${path.map(encodeURIComponent).join('/')}`;
