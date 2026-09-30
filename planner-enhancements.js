@@ -183,10 +183,10 @@ function renderCancelledTrips() {
 }
 
 render = function () {
-  // Navigation is a transient UI choice.  Every fresh launch begins on trips,
-  // even if an earlier app version saved the old overview page.
+  // Navigation is a transient UI choice. Every fresh launch uses the current
+  // "我的行程" overview (the tent layout), never an old restored sub-page.
   if (!window.__campInitialViewSet) {
-    state.page = 'trips';
+    state.page = 'home';
     window.__campInitialViewSet = true;
   }
   normalizeTripCodes();

@@ -29,7 +29,7 @@ const recipeSpecs=[
 ];
 recipeSpecs.slice(0,94).forEach(([name,meal,gear,ingredients,onsite],i)=>recipes.push({id:`RCP${String(i+7).padStart(2,'0')}`,name,meal,gear:gear.split(','),ingredients:ingredients.split('；'),onsite}));
 const defaultLocations=['裝備櫃','裝備袋','營柱袋','工具包','車後廂','廚具箱','焚火箱','餐具包','燈具包','電子包','小物盒','個人背包'];
-const baseState = () => ({gear: defaultGear, recipes, locations:defaultLocations, trips:[], logs:[], activeTripId:null, page:'trips'});
+const baseState = () => ({gear: defaultGear, recipes, locations:defaultLocations, trips:[], logs:[], activeTripId:null, page:'home'});
 let state;
 let listTab = 'pack';
 let gearCategoryFilter = 'all';

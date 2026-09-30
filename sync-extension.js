@@ -55,7 +55,7 @@
   async function replaceState(next) {
     if (!next || typeof next !== 'object') return;
     applyingRemote = true;
-    try { state = { ...next, page: 'trips' }; await nativeSave(); render(); }
+    try { state = { ...next, page: 'home' }; await nativeSave(); render(); }
     finally { applyingRemote = false; }
   }
   async function runSync() {
