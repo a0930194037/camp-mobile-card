@@ -1609,3 +1609,21 @@ const mobileCardRender = render;
 render = function renderWithMobileCardControls() {
   mobileCardRender();
 };
+
+// localStorage resolves before this enhancement finishes loading on iOS Safari.
+// Repaint once after all classic scripts have loaded, so the first visible
+// screen is the desktop-equivalent tent overview rather than core's fallback.
+(() => {
+  let retries = 0;
+  const openTentOverview = () => {
+    try {
+      if (!state) throw new Error('planner state is not ready');
+      state.page = 'home';
+      window.__campInitialViewSet = true;
+      render();
+    } catch {
+      if (retries++ < 20) setTimeout(openTentOverview, 25);
+    }
+  };
+  setTimeout(openTentOverview, 0);
+})();
