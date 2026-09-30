@@ -125,9 +125,11 @@
     pendingRemoteState = next;
     scheduleRemoteApply(0);
   }
-  async function runSync() {
+  async function runSync(announce = false) {
     if (!sync.signedIn()) { setStatus('離線：尚未登入同步帳號'); return false; }
-    setStatus('正在確認同步狀態');
+    // Background polling is intentionally silent: the green lamp represents
+    // a healthy connection and must not blink yellow every second.
+    if (announce || sync.record.pending.length) setStatus('正在同步');
     return sync.sync(() => state, replaceState);
   }
   sync.onQueue = runSync;
@@ -157,7 +159,7 @@
     if (!root || !form || form.querySelector('.sync-settings')) return;
     const actions = form.querySelector(':scope > .actions');
     actions?.insertAdjacentHTML('beforebegin', syncSettingsMarkup());
-    root.querySelector('[data-sync-now]')?.addEventListener('click', runSync);
+    root.querySelector('[data-sync-now]')?.addEventListener('click', () => runSync(true));
     root.querySelector('[data-sync-logout]')?.addEventListener('click', async () => { await sync.signOut(); setStatus('離線：尚未登入同步帳號'); root.remove(); openSettingsDialog(); });
     root.querySelector('[data-sync-login]')?.addEventListener('click', () => authFromSettings(root, 'login'));
     root.querySelector('[data-sync-signup]')?.addEventListener('click', () => authFromSettings(root, 'signup'));
