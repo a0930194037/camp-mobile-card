@@ -230,10 +230,39 @@
       const next = syncable(after); const prior = this.record.snapshot;
       const operations = this.build(prior, next); if (!operations.length) return false;
       this.record.pending.push(...operations);
-      for (const operation of operations) this.record.intents[clockKey(operation.target, operation.path || [])] = { operationId: operation.operationId, clock: operation.clock };
+      for (const operation of operations) this.record.intents[clockKey(operation.target, operation.path || [])] = {
+        operationId: operation.operationId, clock: operation.clock, createdAt: Date.now(), rebasedAgainst: null
+      };
       this.compactPending(); this.record.snapshot = next; this.persist();
       this.onStatus('已離線儲存，等待同步'); clearTimeout(this.timer);
       this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); return true;
+    }
+    rebaseRecentIntents(remote) {
+      // A user can act before the first pull completes.  In that short window
+      // their device has not yet observed a faster device's HLC, so the first
+      // local clock can legitimately sort behind an older *real-world* edit.
+      // Reissue only a fresh, still-pending user intent after observing that
+      // remote clock.  This preserves the last button/checkbox action without
+      // reviving old offline edits hours later.
+      const graceMs = 30000;
+      const pendingById = new Map(this.record.pending.map(operation => [operation.operationId, operation]));
+      const rebased = [];
+      for (const [key, intent] of Object.entries(this.record.intents || {})) {
+        if (!intent?.operationId || Date.now() - Number(intent.createdAt || 0) > graceMs) continue;
+        const local = pendingById.get(intent.operationId);
+        if (!local) continue;
+        const newerRemote = (remote || []).filter(operation => operation.operationId !== local.operationId
+          && clockKey(operation.target, operation.path || []) === key
+          && compareOperations(operation, local) > 0)
+          .sort(compareOperations).pop();
+        if (!newerRemote || intent.rebasedAgainst === newerRemote.operationId) continue;
+        const replacement = this.op(local.target, local.path || [], local.value, local.deleted);
+        this.record.pending.push(replacement);
+        this.record.intents[key] = { operationId: replacement.operationId, clock: replacement.clock, createdAt: intent.createdAt, rebasedAgainst: newerRemote.operationId };
+        rebased.push(replacement);
+      }
+      if (rebased.length) this.compactPending();
+      return rebased;
     }
     async exchange(operations, initialDocument = null) { const rows = await this.request('/rest/v1/rpc/sync_camp_operations', { method: 'POST', body: JSON.stringify({ p_operations: operations, p_materialized: initialDocument }) }); return Array.isArray(rows) ? rows[0] : rows; }
     async sync(getState, replaceState) {
@@ -246,12 +275,13 @@
         // Always observe the full response before creating any follow-up local
         // operation (including the first-device seed snapshot).
         this.observeRemoteClock(remote);
+        this.rebaseRecentIntents(remote);
         if (!remote.length) {
           const current = syncable(getState());
           const local = this.record.legacyPendingBackup?.length ? legacyApply(current, this.record.legacyPendingBackup) : current;
           const seedState = mergeLegacy(reply?.data, local);
           const seed = this.op('snapshot', [], seedState);
-          reply = await this.exchange([seed, ...sent], seedState); remote = reply?.operations || []; this.observeRemoteClock(remote); sentIds.add(seed.operationId);
+          reply = await this.exchange([seed, ...sent], seedState); remote = reply?.operations || []; this.observeRemoteClock(remote); this.rebaseRecentIntents(remote); sentIds.add(seed.operationId);
         }
         const unsent = this.record.pending.filter(operation => !sentIds.has(operation.operationId));
         const all = new Map([...this.record.known, ...remote, ...unsent].map(operation => [operation.operationId, operation]));
