@@ -1,4 +1,4 @@
-/* Sync v4 — operation based, offline-first synchronisation. */
+/* Sync v5 — HLC-ordered, operation-based offline-first synchronisation. */
 (function () {
   const config = globalThis.CAMP_SYNC_CONFIG;
   const hasConfig = !!(config?.url && config?.publishableKey);
@@ -24,6 +24,11 @@
     }
     return String(left.deviceId || '').localeCompare(String(right.deviceId || ''));
   };
+  // The server sequence is deliberately only a last-resort tie breaker.  The
+  // Hybrid Logical Clock remains the authority for conflicting user edits.
+  const compareOperations = (left, right) => cmp(left?.clock, right?.clock)
+    || Number(left?.serverSeq || 0) - Number(right?.serverSeq || 0)
+    || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
   const clockKey = (target, path) => `${target}/${path.map(encodeURIComponent).join('/')}`;
   const legacyApply = (base, batches) => {
     let result = clone(base || {});
@@ -54,18 +59,22 @@
   class CampSync {
     constructor(storage, key = 'camp-sync.v1') {
       this.storage = storage; this.key = key; this.deviceId = uid(); this.timer = null; this.running = false;
-      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, pending: [], known: [], snapshot: null, syncVersion: 4, backups: [] };
+      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, pending: [], known: [], snapshot: null, syncVersion: 5, backups: [], intents: {} };
       this.onStatus = () => {}; this.onQueue = () => {};
     }
     async load() {
       const old = await this.storage.get(this.key) || {};
-      this.record = { ...this.record, ...old, syncVersion: 4 };
+      this.record = { ...this.record, ...old, syncVersion: 5 };
       const legacy = (this.record.pending || []).filter(op => !(op?.operationId && op?.target));
       if (legacy.length) this.record.legacyPendingBackup ??= legacy;
       this.record.pending = (this.record.pending || []).filter(op => op?.operationId && op?.target);
       this.record.known = (this.record.known || []).filter(op => op?.operationId && op?.target);
       this.record.backups ??= [];
+      this.record.intents ??= {};
       this.deviceId = this.record.deviceId || this.deviceId; this.record.deviceId = this.deviceId;
+      // A persisted operation history is also a remote history after a browser
+      // restart.  Advance the HLC before the first new local mutation.
+      this.observeRemoteClock(this.record.known);
       await this.persist(); return this.record;
     }
     async persist() { await this.storage.set(this.key, this.record); }
@@ -94,7 +103,25 @@
     async signOut() { await this.request('/auth/v1/logout', { method: 'POST' }).catch(() => {}); this.record.session = null; await this.persist(); }
     async refresh() { try { const token = this.record.session?.refresh_token; if (!token) return false; this.record.session = await this.authRequest('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: token }) }); await this.persist(); return true; } catch { return false; } }
     needsRefresh() { return Number(this.record.session?.expires_at || 0) <= Math.floor(Date.now() / 1000) + 60; }
-    nextClock() { const old = this.record.clock || {}; const ms = Math.max(Date.now(), Number(old.ms || 0)); const counter = ms === Number(old.ms || 0) ? Number(old.counter || 0) + 1 : 0; return this.record.clock = { ms, counter }; }
+    observeRemoteClock(operations) {
+      const remote = (operations || []).map(operation => operation?.clock).filter(Boolean)
+        .reduce((latest, clock) => !latest || cmp(clock, latest) > 0 ? clock : latest, null);
+      const local = this.record.clock || { ms: 0, counter: 0 };
+      if (!remote) return local;
+      const localMs = Number(local.ms || 0), localCounter = Number(local.counter || 0);
+      const remoteMs = Number(remote.ms || 0), remoteCounter = Number(remote.counter || 0);
+      const ms = Math.max(Date.now(), localMs, remoteMs);
+      const counter = ms === localMs && ms === remoteMs ? Math.max(localCounter, remoteCounter) + 1
+        : ms === localMs ? localCounter + 1
+          : ms === remoteMs ? remoteCounter + 1 : 0;
+      return this.record.clock = { ms, counter };
+    }
+    nextClock() {
+      const old = this.record.clock || {}; const now = Date.now();
+      const oldMs = Number(old.ms || 0), ms = Math.max(now, oldMs);
+      const counter = ms === oldMs ? Number(old.counter || 0) + 1 : 0;
+      return this.record.clock = { ms, counter };
+    }
     op(target, path, value, deleted = false) { const clock = this.nextClock(); return { operationId: uid(), deviceId: this.deviceId, clock: { ...clock, deviceId: this.deviceId }, occurredAt: new Date(clock.ms).toISOString(), target, path, value: clone(value), deleted }; }
     walk(before, after, target, path, output) {
       if (same(before, after)) return;
@@ -186,7 +213,7 @@
       let at = root; path.slice(0, -1).forEach(key => at = at[key] ?? {});
       if (operation.deleted) delete at[path[path.length - 1]]; else at[path[path.length - 1]] = clone(operation.value);
     }
-    materialize(operations) { const bundle = { data: {}, meta: { clocks: {}, tombstones: {} } }; [...operations].sort((a, b) => cmp(a.clock, b.clock) || String(a.operationId).localeCompare(String(b.operationId))).forEach(op => this.apply(bundle, op)); return syncable(bundle.data); }
+    materialize(operations) { const bundle = { data: {}, meta: { clocks: {}, tombstones: {} } }; [...operations].sort(compareOperations).forEach(op => this.apply(bundle, op)); return syncable(bundle.data); }
     compactPending() {
       const latest = new Map();
       for (const operation of this.record.pending) {
@@ -194,12 +221,14 @@
         if (operation.deleted && !(operation.path || []).length) for (const prior of [...latest.keys()]) if (prior.startsWith(`${operation.target}/`)) latest.delete(prior);
         latest.set(key, operation);
       }
-      this.record.pending = [...latest.values()].sort((left, right) => cmp(left.clock, right.clock));
+      this.record.pending = [...latest.values()].sort(compareOperations);
     }
     queue(after) {
       const next = syncable(after); const prior = this.record.snapshot;
       const operations = this.build(prior, next); if (!operations.length) return false;
-      this.record.pending.push(...operations); this.compactPending(); this.record.snapshot = next; this.persist();
+      this.record.pending.push(...operations);
+      for (const operation of operations) this.record.intents[clockKey(operation.target, operation.path || [])] = { operationId: operation.operationId, clock: operation.clock };
+      this.compactPending(); this.record.snapshot = next; this.persist();
       this.onStatus('已離線儲存，等待同步'); clearTimeout(this.timer);
       this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); return true;
     }
@@ -211,19 +240,25 @@
         if (this.needsRefresh() && !(await this.refresh())) throw new Error('登入已過期，請在設定重新登入');
         const sent = [...this.record.pending]; const sentIds = new Set(sent.map(operation => operation.operationId));
         let reply = await this.exchange(sent); let remote = reply?.operations || [];
+        // Always observe the full response before creating any follow-up local
+        // operation (including the first-device seed snapshot).
+        this.observeRemoteClock(remote);
         if (!remote.length) {
           const current = syncable(getState());
           const local = this.record.legacyPendingBackup?.length ? legacyApply(current, this.record.legacyPendingBackup) : current;
           const seedState = mergeLegacy(reply?.data, local);
           const seed = this.op('snapshot', [], seedState);
-          reply = await this.exchange([seed, ...sent], seedState); remote = reply?.operations || []; sentIds.add(seed.operationId);
+          reply = await this.exchange([seed, ...sent], seedState); remote = reply?.operations || []; this.observeRemoteClock(remote); sentIds.add(seed.operationId);
         }
         const unsent = this.record.pending.filter(operation => !sentIds.has(operation.operationId));
         const all = new Map([...this.record.known, ...remote, ...unsent].map(operation => [operation.operationId, operation]));
-        const result = this.materialize([...all.values()]); result.syncFormat = 4;
+        const result = this.materialize([...all.values()]); result.syncFormat = 5;
         replaceState(result);
         this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()];
-        this.record.pending = unsent; this.record.snapshot = result; this.record.legacyPendingBackup = null;
+        this.record.pending = unsent;
+        const acknowledged = new Set(remote.map(operation => operation.operationId));
+        for (const [key, intent] of Object.entries(this.record.intents)) if (acknowledged.has(intent.operationId)) delete this.record.intents[key];
+        this.record.snapshot = result; this.record.legacyPendingBackup = null;
         await this.persist(); this.onStatus(unsent.length ? '已儲存，等待下一次同步' : '已同步');
         if (unsent.length) { clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); }
         return true;
