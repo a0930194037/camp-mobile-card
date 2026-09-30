@@ -170,13 +170,16 @@
     apply(bundle, operation) {
       const meta = bundle.meta ||= { clocks: {}, tombstones: {} }; const data = bundle.data ||= {};
       const target = operation.target; const path = operation.path || []; const tombstone = meta.tombstones[target];
-      if (operation.deleted && (!tombstone || cmp(operation.clock, tombstone) > 0)) meta.tombstones[target] = operation.clock;
-      if (!operation.deleted && tombstone && cmp(operation.clock, tombstone) > 0) delete meta.tombstones[target];
-      if (!operation.deleted && meta.tombstones[target] && cmp(operation.clock, meta.tombstones[target]) <= 0) return;
+      // Store the full operation, not just its clock.  That preserves the
+      // server-sequence fallback when two malformed/legacy operations happen
+      // to have an identical HLC and device ID.
+      if (operation.deleted && (!tombstone || compareOperations(operation, tombstone) > 0)) meta.tombstones[target] = operation;
+      if (!operation.deleted && tombstone && compareOperations(operation, tombstone) > 0) delete meta.tombstones[target];
+      if (!operation.deleted && meta.tombstones[target] && compareOperations(operation, meta.tombstones[target]) <= 0) return;
       const key = clockKey(target, path);
-      if (cmp(operation.clock, meta.clocks[key]) <= 0) return;
-      meta.clocks[key] = operation.clock;
-      if (target === 'snapshot') { if (!bundle.seed || cmp(operation.clock, bundle.seed) > 0) { bundle.data = clone(operation.value || {}); bundle.seed = operation.clock; } return; }
+      if (compareOperations(operation, meta.clocks[key]) <= 0) return;
+      meta.clocks[key] = operation;
+      if (target === 'snapshot') { if (!bundle.seed || compareOperations(operation, bundle.seed) > 0) { bundle.data = clone(operation.value || {}); bundle.seed = operation; } return; }
       if (target === 'state') { this.applyAt(data, path, operation); return; }
       const parts = target.split(':'); const kind = parts[0]; const collection = parts[1]; const parent = parts[2];
       data[collection] ??= [];
