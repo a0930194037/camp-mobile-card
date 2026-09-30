@@ -14,6 +14,10 @@
   await sync.backup(state);
   let applyingRemote = false;
   let committing = Promise.resolve();
+  let pendingCommitCount = 0;
+  let pendingRemoteState = null;
+  let remoteApplyTimer = null;
+  let interactionUntil = 0;
   let appliedInitialRemoteState = false;
   let currentStatus = sync.signedIn() ? '正在確認同步狀態' : '離線：尚未登入同步帳號';
   const nativeSave = store.save.bind(store);
@@ -21,18 +25,66 @@
     // Every existing UI handler reaches this one transaction boundary.  A
     // serial queue avoids a rapid double click generating interleaved diffs.
     const commit = async () => {
-      const after = structuredClone(state);
-      await nativeSave();
-      if (!applyingRemote) sync.queue(after);
+      try {
+        const after = structuredClone(state);
+        await nativeSave();
+        if (!applyingRemote) sync.queue(after);
+      } finally { pendingCommitCount--; scheduleRemoteApply(); }
     };
+    pendingCommitCount++;
     committing = committing.then(commit, commit);
     return committing;
   };
   globalThis.commitMutation = async function commitMutation(mutator) {
-    const run = async () => { await mutator(); const after = structuredClone(state); await nativeSave(); if (!applyingRemote) sync.queue(after); };
+    const run = async () => {
+      try { await mutator(); const after = structuredClone(state); await nativeSave(); if (!applyingRemote) sync.queue(after); }
+      finally { pendingCommitCount--; scheduleRemoteApply(); }
+    };
+    pendingCommitCount++;
     committing = committing.then(run, run);
     return committing;
   };
+
+  function postponeInteraction(milliseconds = 180) {
+    interactionUntil = Math.max(interactionUntil, Date.now() + milliseconds);
+    scheduleRemoteApply(milliseconds + 20);
+  }
+  function interactionIsOpen() {
+    if (pendingCommitCount || document.querySelector('.dialog, details[open]')) return true;
+    const active = document.activeElement;
+    const editingText = active?.matches?.('textarea, input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"])');
+    return !!editingText || Date.now() < interactionUntil;
+  }
+  function scheduleRemoteApply(delay = 180) {
+    if (remoteApplyTimer) clearTimeout(remoteApplyTimer);
+    remoteApplyTimer = setTimeout(() => {
+      remoteApplyTimer = null;
+      if (!pendingRemoteState || interactionIsOpen()) { if (pendingRemoteState) scheduleRemoteApply(220); return; }
+      const next = pendingRemoteState;
+      pendingRemoteState = null;
+      applyRemoteState(next);
+    }, delay);
+  }
+  function applyRemoteState(next) {
+    if (!next || interactionIsOpen()) { pendingRemoteState = next; scheduleRemoteApply(); return; }
+    applyingRemote = true;
+    try {
+      const view = { page: state.page, pendingDeleteTripId: state.pendingDeleteTripId, pendingPurgeId: state.pendingPurgeId };
+      const scrollTop = document.scrollingElement?.scrollTop || 0;
+      state = { ...next, ...view };
+      Promise.resolve(nativeSave()).catch(console.error);
+      render();
+      requestAnimationFrame(() => { if (document.scrollingElement) document.scrollingElement.scrollTop = scrollTop; });
+      appliedInitialRemoteState = true;
+    } finally { applyingRemote = false; }
+  }
+  // A remote sync must never close native selects, open details, or a form.
+  document.addEventListener('pointerdown', event => postponeInteraction(event.target?.matches?.('select, input, textarea, button, summary') ? 900 : 240), true);
+  document.addEventListener('pointerup', () => postponeInteraction(160), true);
+  document.addEventListener('focusin', event => { if (event.target?.matches?.('select, input, textarea')) postponeInteraction(event.target.matches('select') ? 900 : 240); }, true);
+  document.addEventListener('focusout', () => postponeInteraction(140), true);
+  document.addEventListener('change', event => { if (event.target?.matches?.('select, input')) postponeInteraction(260); }, true);
+  document.addEventListener('toggle', event => { if (event.target?.matches?.('details')) postponeInteraction(180); }, true);
 
   const light = document.createElement('button');
   light.type = 'button'; light.className = 'camp-sync-light';
@@ -66,25 +118,12 @@
   light.addEventListener('pointerdown', () => { holdTimer = setTimeout(showStatusDetail, 550); });
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => light.addEventListener(type, () => clearTimeout(holdTimer)));
 
-  async function replaceState(next) {
+  function replaceState(next) {
     if (!next || typeof next !== 'object') return;
-    applyingRemote = true;
-    try {
-      // Sync data, not navigation. Retain the current screen and selection so
-      // a completed background sync never interrupts a checklist or editor.
-      const view = {
-        page: state.page,
-        pendingDeleteTripId: state.pendingDeleteTripId,
-        pendingPurgeId: state.pendingPurgeId
-      };
-      state = { ...next, ...view };
-      await nativeSave();
-      // Refresh the current page with the merged data, but never while a form
-      // is open. Navigation is preserved above, so this cannot jump home.
-      if (!document.querySelector('.dialog')) render();
-      appliedInitialRemoteState = true;
-    }
-    finally { applyingRemote = false; }
+    // Keep only the latest remote state while any control is actively used.
+    // Applying it later avoids destroying native dropdowns and focused forms.
+    pendingRemoteState = next;
+    scheduleRemoteApply(0);
   }
   async function runSync() {
     if (!sync.signedIn()) { setStatus('離線：尚未登入同步帳號'); return false; }
