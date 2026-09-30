@@ -33,8 +33,11 @@
     const commit = async () => {
       try {
         const after = structuredClone(state);
-        await nativeSave();
+        // Queue the intent before the first await.  A sync response may resume
+        // while chrome.storage is writing; waiting until after that write left
+        // a window where an older remote snapshot could repaint this checkbox.
         if (!applyingRemote) sync.queue(after);
+        await nativeSave();
       } finally { pendingCommitCount--; scheduleRemoteApply(); }
     };
     if (!applyingRemote) invalidateDeferredRemote();
@@ -44,7 +47,14 @@
   };
   globalThis.commitMutation = async function commitMutation(mutator) {
     const run = async () => {
-      try { await mutator(); const after = structuredClone(state); await nativeSave(); if (!applyingRemote) sync.queue(after); }
+      try {
+        await mutator();
+        const after = structuredClone(state);
+        // Same atomic intent rule as store.save(): remote reconciliation must
+        // be able to see this mutation before any asynchronous local write.
+        if (!applyingRemote) sync.queue(after);
+        await nativeSave();
+      }
       finally { pendingCommitCount--; scheduleRemoteApply(); }
     };
     if (!applyingRemote) invalidateDeferredRemote();
@@ -128,6 +138,14 @@
 
   function replaceState(next) {
     if (!next || typeof next !== 'object') return;
+    // A result produced before a local transaction was queued is stale from
+    // this device's perspective.  Keep the already-visible local state and
+    // wait for the queued operation's acknowledgement instead of briefly
+    // reverting a checkbox (or any other field) on screen.
+    if (pendingCommitCount || sync.record.pending.length) {
+      pendingRemoteState = null;
+      return;
+    }
     // Keep only the latest remote state while any control is actively used.
     // Applying it later avoids destroying native dropdowns and focused forms.
     pendingRemoteState = next;

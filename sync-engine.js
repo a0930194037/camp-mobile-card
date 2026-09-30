@@ -253,13 +253,17 @@
         const unsent = this.record.pending.filter(operation => !sentIds.has(operation.operationId));
         const all = new Map([...this.record.known, ...remote, ...unsent].map(operation => [operation.operationId, operation]));
         const result = this.materialize([...all.values()]); result.syncFormat = 5;
-        replaceState(result);
         this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()];
         this.record.pending = unsent;
         const acknowledged = new Set(remote.map(operation => operation.operationId));
         for (const [key, intent] of Object.entries(this.record.intents)) if (acknowledged.has(intent.operationId)) delete this.record.intents[key];
         this.record.snapshot = result; this.record.legacyPendingBackup = null;
-        await this.persist(); this.onStatus(unsent.length ? '已儲存，等待下一次同步' : '已同步');
+        // Persist acknowledgement state before handing a materialized state to
+        // the UI adapter.  The adapter can therefore distinguish an
+        // acknowledged merge from an old response racing a fresh local edit.
+        await this.persist();
+        replaceState(result);
+        this.onStatus(unsent.length ? '已儲存，等待下一次同步' : '已同步');
         if (unsent.length) { clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); }
         return true;
       } catch (error) {
