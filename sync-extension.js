@@ -21,14 +21,15 @@
     // Every existing UI handler reaches this one transaction boundary.  A
     // serial queue avoids a rapid double click generating interleaved diffs.
     const commit = async () => {
+      const after = structuredClone(state);
       await nativeSave();
-      if (!applyingRemote) sync.queue(state);
+      if (!applyingRemote) sync.queue(after);
     };
     committing = committing.then(commit, commit);
     return committing;
   };
   globalThis.commitMutation = async function commitMutation(mutator) {
-    const run = async () => { await mutator(); await nativeSave(); if (!applyingRemote) sync.queue(state); };
+    const run = async () => { await mutator(); const after = structuredClone(state); await nativeSave(); if (!applyingRemote) sync.queue(after); };
     committing = committing.then(run, run);
     return committing;
   };
