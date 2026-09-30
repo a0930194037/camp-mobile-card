@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f4937">
+  <link rel="manifest" href="manifest.webmanifest">
+  <title>露營助手・離線行程卡</title>
+  <style>
+    :root { --ink:#18352a; --green:#1f4937; --line:#dbe1d9; --paper:#fffefa; --muted:#68746d; }
+    * { box-sizing:border-box; } body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.45 system-ui,"Noto Sans TC","Microsoft JhengHei",sans-serif; }
+    main { max-width:680px; margin:auto; padding:24px 20px calc(38px + env(safe-area-inset-bottom)); }
+    header { border-bottom:1px solid var(--line); padding-bottom:16px; margin-bottom:22px; } h1 { margin:0; font-size:28px; } h2 { font-size:17px; margin:0; } .sub { color:var(--muted); margin:5px 0 0; }
+    .notice { padding:14px; background:#edf1eb; border-left:3px solid var(--green); margin:18px 0; } .hidden { display:none!important; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin:18px 0; } button,.file-label { appearance:none; border:1px solid var(--green); border-radius:4px; padding:11px 14px; background:transparent; color:var(--green); font:700 15px inherit; cursor:pointer; }
+    button.primary { background:var(--green); color:#fff; } input[type=file] { display:none; } .section { margin-top:28px; } .section-head { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    .count { color:var(--green); font-weight:700; } .item { display:flex; gap:13px; align-items:center; padding:15px 2px; border-bottom:1px solid var(--line); font-weight:650; }
+    .item input { width:23px; height:23px; accent-color:var(--green); flex:none; } .item.checked span { color:var(--muted); text-decoration:line-through; } .empty { text-align:center; color:var(--muted); padding:56px 12px; }
+    #status { min-height:1.5em; color:var(--muted); font-size:14px; } .meta { font-size:14px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <header><p class="sub">露營助手・離線行程卡</p><h1 id="title">尚未載入行程</h1><p class="meta" id="meta">匯入電腦端輸出的手機離線卡後，即可離線勾選。</p></header>
+    <section id="empty" class="empty"><p>此頁只提供核取方塊。</p><label class="file-label">匯入手機離線卡<input id="card-file" type="file" accept="application/json,.json"></label></section>
+    <section id="card" class="hidden">
+      <div class="actions"><label class="file-label">更換行程卡<input id="replace-file" type="file" accept="application/json,.json"></label><button class="primary" id="export">匯出勾選更新</button></div>
+      <p id="status" aria-live="polite"></p><div id="lists"></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
