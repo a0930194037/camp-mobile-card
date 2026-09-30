@@ -33,5 +33,6 @@ async function replaceState(next) { if (!next || typeof next !== 'object') retur
 async function doSync() { if (!sync.signedIn()) return; await sync.sync(()=>state,replaceState); }
 async function authenticate(kind) { const email=$('#email').value.trim(),password=$('#password').value; if(!email||!password){status('請輸入 Email 與密碼');return;} try{status('處理中…');if(kind==='signup')await sync.signUp(email,password);else await sync.signIn(email,password);await doSync();status('已登入並同步');render();}catch(error){status(error.message);} }
 $('#login').onclick=()=>authenticate('login'); $('#signup').onclick=()=>authenticate('signup'); $('#sync-now').onclick=doSync; $('#logout').onclick=async()=>{await sync.signOut();state=null;render();status('已登出');};
+$('#resend').onclick=async()=>{const email=$('#email').value.trim();if(!email){status('請先輸入 Email');return;}try{await sync.resendVerification(email);status('已重寄驗證信；請只開啟最新的一封。');}catch(error){status(error.message);}};
 sync.onStatus=status;
 (async()=>{await sync.load();state=await storage.get('camp-mobile-state.v1');render();if(sync.signedIn()){await doSync();setInterval(doSync,15000);}})();

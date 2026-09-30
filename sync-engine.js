@@ -19,6 +19,7 @@
     async request(path,options={}){const response=await fetch(`${config.url}${path}`,{...options,headers:this.headers(options.headers)});if(!response.ok){const detail=await response.json().catch(()=>({}));throw new Error(detail.message||detail.msg||detail.error_description||detail.error||`同步服務錯誤 (${response.status})`)}return response.status===204?null:response.json()}
     async signUp(email,password){const data=await this.request('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password})});if(!data.session)throw new Error('帳號已建立；請先到信箱完成驗證，再登入。');this.record.session=data.session;await this.persist()}
     async signIn(email,password){const data=await this.request('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});this.record.session=data;await this.persist()}
+    async resendVerification(email){await this.request('/auth/v1/resend',{method:'POST',body:JSON.stringify({type:'signup',email})})}
     async signOut(){await this.request('/auth/v1/logout',{method:'POST'}).catch(()=>{});this.record.session=null;await this.persist()}
     queue(before,after){const changes=diff(before,after);if(!changes.length)return;this.record.pending.push({id:id(),deviceId:this.deviceId,at:new Date().toISOString(),changes});this.record.baseline=clone(after);this.persist();this.onStatus('已離線儲存，等待同步');clearTimeout(this.timer);this.timer=setTimeout(()=>this.sync().catch(()=>{}),450)}
     async pull(){const rows=await this.request('/rest/v1/camp_documents?select=version,data,updated_at&limit=1');return rows?.[0]||null}
