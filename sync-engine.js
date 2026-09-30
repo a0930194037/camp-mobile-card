@@ -69,26 +69,42 @@
       if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.message || detail.msg || detail.error_description || detail.error || `同步服務錯誤 (${response.status})`); }
       return response.status === 204 ? null : response.json();
     }
+    async authRequest(path, options = {}) {
+      // Refreshing a Supabase session must not send the already-expired access
+      // token. The publishable key is sufficient for all Auth endpoints.
+      const response = await fetch(`${config.url}${path}`, {
+        ...options,
+        headers: { apikey: config.publishableKey, 'Content-Type': 'application/json', ...(options.headers || {}) }
+      });
+      if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.message || detail.msg || detail.error_description || detail.error || `登入服務錯誤 (${response.status})`); }
+      return response.status === 204 ? null : response.json();
+    }
     async signUp(email, password) {
-      const data = await this.request('/auth/v1/signup', { method: 'POST', body: JSON.stringify({ email, password }) });
+      const data = await this.authRequest('/auth/v1/signup', { method: 'POST', body: JSON.stringify({ email, password }) });
       if (!data.session) throw new Error('帳號已建立；請到電子郵件完成驗證後再登入。');
       this.record.session = data.session; await this.persist(); return data;
     }
     async signIn(email, password) {
-      const data = await this.request('/auth/v1/token?grant_type=password', { method: 'POST', body: JSON.stringify({ email, password }) });
+      const data = await this.authRequest('/auth/v1/token?grant_type=password', { method: 'POST', body: JSON.stringify({ email, password }) });
       this.record.session = data; await this.persist(); return data;
     }
     async resendVerification(email) {
-      await this.request('/auth/v1/resend', { method: 'POST', body: JSON.stringify({ type: 'signup', email }) });
+      await this.authRequest('/auth/v1/resend', { method: 'POST', body: JSON.stringify({ type: 'signup', email }) });
     }
     async signOut() { await this.request('/auth/v1/logout', { method: 'POST' }).catch(() => {}); this.record.session = null; await this.persist(); }
     async refresh() {
       const refreshToken = this.record.session?.refresh_token;
       if (!refreshToken) return false;
       try {
-        const data = await this.request('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: refreshToken }) });
+        const data = await this.authRequest('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: refreshToken }) });
         this.record.session = data; await this.persist(); return true;
       } catch { return false; }
+    }
+    needsRefresh() {
+      const expiresAt = Number(this.record.session?.expires_at || 0);
+      // Supabase stores this value in Unix seconds. Renew a minute early so a
+      // normal edit never has to wait for an expired-token retry.
+      return !!expiresAt && expiresAt <= Math.floor(Date.now() / 1000) + 60;
     }
     queue(before, after) {
       const changes = diff(syncable(before), syncable(after));
@@ -107,6 +123,9 @@
       if (!hasConfig || !this.signedIn() || this.running || !navigator.onLine) return false;
       this.running = true;
       try {
+        if (this.needsRefresh() && !(await this.refresh())) {
+          this.record.session = null; await this.persist(); this.onStatus('登入已過期，請在設定重新登入'); return false;
+        }
         let remote = await this.pull();
         if (remote?.data) remote = { ...remote, data: syncable(remote.data) };
         const localState = syncable(getState());
@@ -130,7 +149,8 @@
         }
         await this.persist(); this.onStatus('已同步'); return true;
       } catch (error) {
-        if (error.message.includes('401') && await this.refresh()) { this.running = false; return this.sync(getState, replaceState); }
+        if (/(401|jwt expired|expired|invalid jwt)/i.test(error.message) && await this.refresh()) { this.running = false; return this.sync(getState, replaceState); }
+        if (/(401|jwt expired|expired|invalid jwt)/i.test(error.message)) { this.record.session = null; await this.persist(); this.onStatus('登入已過期，請在設定重新登入'); return false; }
         this.onStatus(`等待同步：${error.message}`); return false;
       } finally { this.running = false; }
     }
