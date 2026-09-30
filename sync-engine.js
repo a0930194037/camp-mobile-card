@@ -218,7 +218,19 @@
       let at = root; path.slice(0, -1).forEach(key => at = at[key] ?? {});
       if (operation.deleted) delete at[path[path.length - 1]]; else at[path[path.length - 1]] = clone(operation.value);
     }
-    materialize(operations) { const bundle = { data: {}, meta: { clocks: {}, tombstones: {} } }; [...operations].sort(compareOperations).forEach(op => this.apply(bundle, op)); return syncable(bundle.data); }
+    materialize(operations) {
+      const bundle = { data: {}, meta: { clocks: {}, tombstones: {} } };
+      const ordered = [...operations].sort(compareOperations);
+      // A snapshot is a migration/bootstrap base, never a competing user
+      // change. Applying a high-clock legacy snapshot after row operations
+      // used to erase a freshly checked box wholesale. Select the newest
+      // base once, then layer every granular operation over it.
+      const snapshots = ordered.filter(operation => operation.target === 'snapshot');
+      const base = snapshots[snapshots.length - 1];
+      if (base) this.apply(bundle, base);
+      ordered.filter(operation => operation.target !== 'snapshot').forEach(operation => this.apply(bundle, operation));
+      return syncable(bundle.data);
+    }
     compactPending() {
       const latest = new Map();
       for (const operation of this.record.pending) {

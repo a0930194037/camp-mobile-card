@@ -3,7 +3,7 @@
 <title>Camp sync engine checks</title>
 <pre id="result">Running…</pre>
 <script>globalThis.CAMP_SYNC_CONFIG={url:'https://example.invalid',publishableKey:'test'};</script>
-<script src="../sync-engine.js?v=43"></script>
+<script src="../sync-engine.js?v=44"></script>
 <script>
 (async () => {
   const output = document.querySelector('#result');
@@ -44,7 +44,16 @@
       { operationId: 'remove-item', deviceId: 'a', clock: { ms: 3, counter: 0, deviceId: 'a' }, target: 'row:trips:trip-3:items:gear-3', path: [], value: null, deleted: true, serverSeq: 3 }
     ]);
     assert(rowResult.trips.length === 1 && rowResult.trips[0].items.length === 0, 'row deletion removed its parent trip');
-    output.textContent = 'PASS: 3 sync race checks';
+
+    // A bootstrap snapshot must never overwrite a later granular checkbox
+    // operation merely because a legacy device assigned it a larger clock.
+    const snapshot = await create();
+    const snapshotResult = snapshot.materialize([
+      { operationId: 'checked-row', deviceId: 'phone', clock: { ms: 10, counter: 0, deviceId: 'phone' }, target: 'row:trips:trip-4:items:gear-4', path: ['checked'], value: true, deleted: false, serverSeq: 1 },
+      { operationId: 'legacy-snapshot', deviceId: 'desktop', clock: { ms: 999999, counter: 0, deviceId: 'desktop' }, target: 'snapshot', path: [], value: { trips: [{ id: 'trip-4', items: [{ gearId: 'gear-4', checked: false }] }] }, deleted: false, serverSeq: 2 }
+    ]);
+    assert(snapshotResult.trips[0].items[0].checked === true, 'legacy snapshot overwrote a granular checkbox change');
+    output.textContent = 'PASS: 4 sync race checks';
   } catch (error) {
     output.textContent = `FAIL: ${error.message}`;
     throw error;
