@@ -12,6 +12,9 @@
   const sync = new CampSync(storage, 'camp-sync.v1');
   await sync.load();
   await sync.backup(state);
+  // Assign v6 immutable keys locally before the sync wrapper begins queuing.
+  sync.migrateState(state);
+  await store.save();
   // Never turn the initial UI render into a write.  A mobile card can reopen
   // with an older local cache while camp-sync already knows newer remote
   // checklist values. Establishing a baseline first lets the first pull
@@ -40,15 +43,19 @@
   store.save = async function syncedSave() {
     // Every existing UI handler reaches this one transaction boundary.  A
     // serial queue avoids a rapid double click generating interleaved diffs.
+    const control = document.activeElement?.closest?.('button, input[type="submit"]');
+    if (control?.dataset.syncCommitting === 'true') return false;
+    if (control) { control.dataset.syncCommitting = 'true'; control.disabled = true; }
     const commit = async () => {
       try {
+        sync.migrateState(state);
         const after = structuredClone(state);
         // Queue the intent before the first await.  A sync response may resume
         // while chrome.storage is writing; waiting until after that write left
         // a window where an older remote snapshot could repaint this checkbox.
         if (!applyingRemote) sync.queue(after);
         await nativeSave();
-      } finally { pendingCommitCount--; scheduleRemoteApply(); }
+      } finally { pendingCommitCount--; if (control) { control.disabled = false; delete control.dataset.syncCommitting; } scheduleRemoteApply(); }
     };
     if (!applyingRemote) invalidateDeferredRemote();
     pendingCommitCount++;
@@ -56,21 +63,32 @@
     return committing;
   };
   globalThis.commitMutation = async function commitMutation(mutator) {
+    const control = document.activeElement?.closest?.('button, input[type="submit"]');
+    if (control?.dataset.syncCommitting === 'true') return false;
+    if (control) { control.dataset.syncCommitting = 'true'; control.disabled = true; }
     const run = async () => {
       try {
         await mutator();
+        sync.migrateState(state);
         const after = structuredClone(state);
         // Same atomic intent rule as store.save(): remote reconciliation must
         // be able to see this mutation before any asynchronous local write.
         if (!applyingRemote) sync.queue(after);
         await nativeSave();
       }
-      finally { pendingCommitCount--; scheduleRemoteApply(); }
+      finally { pendingCommitCount--; if (control) { control.disabled = false; delete control.dataset.syncCommitting; } scheduleRemoteApply(); }
     };
     if (!applyingRemote) invalidateDeferredRemote();
     pendingCommitCount++;
     committing = committing.then(run, run);
     return committing;
+  };
+  globalThis.recycleEntity = function recycleEntity(collection, entity) {
+    if (!entity) return;
+    state.recycleBin ??= [];
+    const syncId = entity.syncId || `legacy:${collection}:${entity.id ?? entity.tripId}`;
+    state.recycleBin = state.recycleBin.filter(entry => !(entry.collection === collection && entry.entity?.syncId === syncId));
+    state.recycleBin.unshift({ syncId: `recycle:${collection}:${syncId}`, collection, entity: structuredClone(entity), deletedAt: new Date().toISOString() });
   };
 
   function postponeInteraction(milliseconds = 180) {
@@ -170,9 +188,15 @@
   }
   sync.onQueue = runSync;
 
+  function recycleMarkup() {
+    const entries = (state.recycleBin || []).slice(0, 30);
+    if (!entries.length) return '';
+    return `<section class="field full sync-recycle"><label>回收區</label><p class="tiny">已刪除項目不會被舊裝置復活；請在此明確復原。</p>${entries.map(entry => `<div class="row between"><span>${esc(entry.collection)}：${esc(entry.entity?.name || entry.entity?.id || '項目')}</span><button type="button" class="ghost" data-sync-restore="${esc(entry.syncId)}">復原</button></div>`).join('')}</section>`;
+  }
+
   function syncSettingsMarkup() {
     const email = sync.record.session?.user?.email || '';
-    if (sync.signedIn()) return `<section class="field full sync-settings"><label>跨裝置同步</label><p class="tiny">${esc(email || '已登入同步帳號')} · ${esc(currentStatus)}</p><div class="actions"><button type="button" class="secondary" data-sync-now>立即同步</button><button type="button" class="ghost danger" data-sync-logout>登出同步帳號</button></div></section>`;
+    if (sync.signedIn()) return `<section class="field full sync-settings"><label>跨裝置同步</label><p class="tiny">${esc(email || '已登入同步帳號')} · ${esc(currentStatus)}</p><div class="actions"><button type="button" class="secondary" data-sync-now>立即同步</button><button type="button" class="ghost danger" data-sync-logout>登出同步帳號</button></div></section>${recycleMarkup()}`;
     return `<section class="field full sync-settings"><label>跨裝置同步</label><p class="tiny">${esc(currentStatus)}。登入後會在開啟工具及重新連線時自動同步。</p><div class="form-grid"><div class="field"><label>Email</label><input type="email" data-sync-email autocomplete="email"></div><div class="field"><label>密碼</label><input type="password" data-sync-password autocomplete="current-password" minlength="8"></div></div><p class="tiny" data-sync-message></p><div class="actions"><button type="button" class="primary" data-sync-login>登入</button><button type="button" class="secondary" data-sync-signup>首次建立帳號</button><button type="button" class="ghost" data-sync-resend>重寄驗證信</button></div></section>`;
   }
   async function authFromSettings(root, kind) {
@@ -196,6 +220,12 @@
     const actions = form.querySelector(':scope > .actions');
     actions?.insertAdjacentHTML('beforebegin', syncSettingsMarkup());
     root.querySelector('[data-sync-now]')?.addEventListener('click', () => runSync(true));
+    root.querySelectorAll('[data-sync-restore]').forEach(button => button.addEventListener('click', async () => {
+      const entry = (state.recycleBin || []).find(item => item.syncId === button.dataset.syncRestore);
+      if (!entry || !['gear', 'recipes', 'trips', 'logs', 'tripRows'].includes(entry.collection)) return;
+      await commitMutation(async () => { if(entry.collection==='tripRows'){const trip=state.trips?.find(item=>item.syncId===entry.entity.tripSyncId);if(trip&&!trip[entry.entity.field]?.some(item=>item.syncId===entry.entity.row.syncId)){trip[entry.entity.field].push(structuredClone(entry.entity.row));trip.overrides??={added:[],removed:[]};trip.overrides.removed=trip.overrides.removed.filter(id=>id!==entry.entity.row.gearId);}}else{state[entry.collection]??=[];if(!state[entry.collection].some(item=>item.syncId===entry.entity.syncId))state[entry.collection].push(structuredClone(entry.entity));}state.recycleBin=state.recycleBin.filter(item=>item.syncId!==entry.syncId); });
+      root.remove(); openSettingsDialog();
+    }));
     root.querySelector('[data-sync-logout]')?.addEventListener('click', async () => { await sync.signOut(); setStatus('離線：尚未登入同步帳號'); root.remove(); openSettingsDialog(); });
     root.querySelector('[data-sync-login]')?.addEventListener('click', () => authFromSettings(root, 'login'));
     root.querySelector('[data-sync-signup]')?.addEventListener('click', () => authFromSettings(root, 'signup'));

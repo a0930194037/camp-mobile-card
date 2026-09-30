@@ -1172,9 +1172,12 @@ function recipeLibraryDialog(existing) {
       $('#delete-recipe', dialogRoot).textContent = '再次點擊刪除';
       return;
     }
-    state.recipes = state.recipes.filter(item => item.id !== existing.id);
-    state.trips.forEach(tripData => { tripData.recipeIds = (tripData.recipeIds || []).filter(id => id !== existing.id); recalc(tripData); });
-    await store.save();
+    await commitMutation(async () => {
+      recycleEntity('recipes', existing);
+      state.trips.forEach(tripData => { tripData.recipeSnapshots ??= {}; tripData.recipeSnapshots[existing.id] ??= structuredClone(existing); });
+      state.recipes = state.recipes.filter(item => item.syncId !== existing.syncId);
+      // Existing trip cards keep their rendered recipe/shopping snapshot.
+    });
     closeDialog();
     render();
   });
@@ -1624,6 +1627,13 @@ chooseTripCard = function chooseUnifiedTripCard() {
 
 const mobileCardAction = action;
 action = async function mobileCardActionHandler(name, data = {}) {
+  if (name === 'remove-from-trip') {
+    const current = trip();
+    const row = current?.items?.find(item => item.gearId === data.id);
+    if (!current || !row) return;
+    await commitMutation(async () => { state.recycleBin ??= []; state.recycleBin.unshift({ syncId: `recycle:tripRows:${row.syncId}`, collection: 'tripRows', entity: { tripSyncId: current.syncId, field: 'items', row: structuredClone(row) }, deletedAt: now() }); current.items = current.items.filter(item => item.syncId !== row.syncId); current.overrides ??= { added: [], removed: [] }; if (!current.overrides.removed.includes(row.gearId)) current.overrides.removed.push(row.gearId); current.overrides.added = current.overrides.added.filter(item => item.gearId !== row.gearId); });
+    return render();
+  }
   return mobileCardAction(name, data);
 };
 
@@ -1631,3 +1641,22 @@ const mobileCardRender = render;
 render = function renderWithMobileCardControls() {
   mobileCardRender();
 };
+
+const v6BuildShopping = buildShopping;
+buildShopping = function buildShoppingWithStableRows(tripData) {
+  const previous = new Map();
+  (tripData.shopping || []).forEach(row => { const key=row.shoppingKey||`${row.recipeId||''}:${row.name||''}`; (previous.get(key)||previous.set(key,[]).get(key)).push(row); });
+  return v6BuildShopping(tripData).map((row,index) => { const key=row.shoppingKey||`${row.recipeId||''}:${row.name||''}`, prior=previous.get(key)?.shift(), syncId=prior?.syncId||`legacy:shopping:${tripData.syncId||tripData.id}:${key}:${index}`; return {...row,checked:prior?.checked??row.checked,syncId,shoppingRowId:syncId}; });
+};
+
+document.addEventListener('click', async event => {
+  const button = event.target.closest?.('#delete-gear');
+  if (!button) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const box = button.closest('.dialog');
+  const displayId = box?.querySelector('#auto-id')?.textContent?.trim() || box?.querySelector('[name="id"]')?.value;
+  const entity = state.gear.find(item => item.id === displayId);
+  if (!entity || !confirm('刪除這件裝備？')) return;
+  await commitMutation(async () => { recycleEntity('gear', entity); state.gear = state.gear.filter(item => item.syncId !== entity.syncId); });
+  closeDialog(); render();
+}, true);

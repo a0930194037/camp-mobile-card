@@ -3,7 +3,7 @@
 <title>Camp sync engine checks</title>
 <pre id="result">Running…</pre>
 <script>globalThis.CAMP_SYNC_CONFIG={url:'https://example.invalid',publishableKey:'test'};</script>
-<script src="../sync-engine.js?v=49"></script>
+<script src="../sync-engine.js?v=51"></script>
 <script>
 (async () => {
   const output = document.querySelector('#result');
@@ -79,7 +79,25 @@
       { operationId: 'legacy-snapshot', deviceId: 'desktop', clock: { ms: 999999, counter: 0, deviceId: 'desktop' }, target: 'snapshot', path: [], value: { trips: [{ id: 'trip-4', items: [{ gearId: 'gear-4', checked: false }] }] }, deleted: false, serverSeq: 2 }
     ]);
     assert(snapshotResult.trips[0].items[0].checked === true, 'legacy snapshot overwrote a granular checkbox change');
-    output.textContent = 'PASS: 7 sync race checks';
+
+    // A cancelled trip creates a lifecycle tombstone. A late checklist field
+    // from an old offline device may never recreate that parent trip.
+    const lifecycle = await create();
+    const cancelled = lifecycle.materialize([
+      { operationId: 'life-trip', deviceId: 'a', clock: { ms: 1, counter: 0, deviceId: 'a' }, target: 'entity:trips:trip-6', path: [], value: { id: 'trip-6', syncId: 'trip-6', name: 'Trip' }, deleted: false, serverSeq: 1 },
+      { operationId: 'life-item', deviceId: 'a', clock: { ms: 2, counter: 0, deviceId: 'a' }, target: 'row:trips:trip-6:items:item-6', path: [], value: { syncId: 'item-6', checked: false }, deleted: false, serverSeq: 2 },
+      { operationId: 'cancel-life', deviceId: 'a', clock: { ms: 3, counter: 0, deviceId: 'a' }, target: 'lifecycle:trips:trip-6', path: [], value: { state: 'deleted' }, deleted: false, serverSeq: 3 },
+      { operationId: 'cancel-entity', deviceId: 'a', clock: { ms: 4, counter: 0, deviceId: 'a' }, target: 'entity:trips:trip-6', path: [], value: null, deleted: true, serverSeq: 4 },
+      { operationId: 'late-check', deviceId: 'old', clock: { ms: 999, counter: 0, deviceId: 'old' }, target: 'row:trips:trip-6:items:item-6', path: ['checked'], value: true, deleted: false, serverSeq: 5 }
+    ]);
+    assert(!cancelled.trips?.some(trip => trip.syncId === 'trip-6'), 'late checklist operation resurrected a cancelled trip');
+
+    // Legacy migration must derive stable IDs on both devices rather than
+    // generate random keys for the same pre-v6 data.
+    const firstMigration = lifecycle.migrateState({ gear: [{ id: 'F01', name: '桌子' }], trips: [{ id: 'T01', items: [{ gearId: 'F01' }], shopping: [{ name: '米' }] }] });
+    const secondMigration = lifecycle.migrateState({ gear: [{ id: 'F01', name: '桌子' }], trips: [{ id: 'T01', items: [{ gearId: 'F01' }], shopping: [{ name: '米' }] }] });
+    assert(firstMigration.gear[0].syncId === secondMigration.gear[0].syncId && firstMigration.trips[0].items[0].syncId === secondMigration.trips[0].items[0].syncId, 'legacy migration produced unstable IDs');
+    output.textContent = 'PASS: 9 sync race checks';
   } catch (error) {
     output.textContent = `FAIL: ${error.message}`;
     throw error;

@@ -5,15 +5,23 @@
   const clone = value => value == null ? value : structuredClone(value);
   const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-  const collections = ['gear', 'recipes', 'trips', 'logs', 'discardedTrips', 'tripTombstones'];
-  const entityId = (value, index) => String(value?.id ?? value?.tripId ?? value?.code ?? `index:${index}`);
-  const rowId = (field, value, index) => field === 'items'
-    ? String(value?.gearId ?? value?.id ?? `index:${index}`)
-    : String(value?.shoppingKey ?? value?.id ?? `${value?.recipeId || ''}:${value?.name || ''}:${index}`);
+  const collections = ['gear', 'recipes', 'trips', 'logs', 'discardedTrips', 'tripTombstones', 'recycleBin'];
+  // Display IDs are editable; immutable sync IDs are the operation keys.
+  const entityId = (value, index) => String(value?.syncId ?? value?.id ?? value?.tripId ?? value?.code ?? `index:${index}`);
+  const rowId = (field, value, index) => String(value?.syncId ?? value?.shoppingRowId ?? (field === 'items' ? value?.gearSyncId : undefined) ?? value?.gearId ?? value?.id ?? `index:${index}`);
   const syncable = value => {
     const next = clone(value || {});
     ['page', 'pendingDeleteTripId', 'pendingPurgeId'].forEach(key => delete next[key]);
     return next;
+  };
+  const lifecycleKey = target => {
+    const parts = String(target || '').split(':');
+    if (parts[0] === 'lifecycle') return parts[1] === 'row' || parts[1] === 'override'
+      ? `${parts[1]}:${parts.slice(2).join(':')}` : `${parts[1]}:${parts[2]}`;
+    if (parts[0] === 'entity') return `${parts[1]}:${parts[2]}`;
+    if (parts[0] === 'row') return `row:${parts[2]}:${parts[3]}:${parts[4]}`;
+    if (parts[0] === 'override') return `override:${parts[2]}:${parts[3]}:${parts[4]}`;
+    return null;
   };
   const cmp = (left, right) => {
     if (!right) return 1;
@@ -72,12 +80,12 @@
   class CampSync {
     constructor(storage, key = 'camp-sync.v1') {
       this.storage = storage; this.key = key; this.deviceId = uid(); this.timer = null; this.running = false;
-      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, serverTimeMs: 0, pending: [], known: [], snapshot: null, syncVersion: 5, backups: [], intents: {} };
+      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, serverTimeMs: 0, pending: [], known: [], snapshot: null, syncVersion: 6, backups: [], intents: {}, protocol: 6 };
       this.onStatus = () => {}; this.onQueue = () => {};
     }
     async load() {
       const old = await this.storage.get(this.key) || {};
-      this.record = { ...this.record, ...old, syncVersion: 5 };
+      this.record = { ...this.record, ...old, syncVersion: 6, protocol: 6 };
       const legacy = (this.record.pending || []).filter(op => !(op?.operationId && op?.target));
       if (legacy.length) this.record.legacyPendingBackup ??= legacy;
       this.record.pending = (this.record.pending || []).filter(op => op?.operationId && op?.target);
@@ -89,6 +97,21 @@
       // restart.  Advance the HLC before the first new local mutation.
       this.observeRemoteClock(this.record.known);
       await this.persist(); return this.record;
+    }
+    migrateState(state) {
+      const next = state || {};
+      const newId = () => uid();
+      const ensure = (entity, collection, index = 0) => { if (entity && !entity.syncId) entity.syncId = `legacy:${collection}:${entity.id ?? entity.tripId ?? entity.code ?? index}`; return entity; };
+      for (const collection of collections) for (const [index, entity] of (next[collection] || []).entries()) ensure(entity, collection, index);
+      const gearByDisplayId = new Map((next.gear || []).map(gear => [String(gear.id), gear]));
+      for (const trip of next.trips || []) {
+        ensure(trip, 'trips');
+        for (const [index,row] of (trip.items || []).entries()) { const gear = gearByDisplayId.get(String(row.gearId)); row.gearSyncId ??= gear?.syncId || `legacy:missing-gear:${row.gearId || index}`; row.syncId ??= `${trip.syncId}:item:${row.gearSyncId}`; row.snapshotName ??= row.name || gear?.name || row.gearId || '已刪除裝備'; }
+        for (const [index,row] of (trip.shopping || []).entries()) { row.syncId ??= `legacy:shopping:${trip.syncId}:${row.shoppingKey || `${row.recipeId || ''}:${row.name || ''}`}:${index}`; row.shoppingRowId ??= row.syncId; }
+        for (const [recipeId,entries] of Object.entries(trip.extraShopping || {})) for (const [index,row] of (entries || []).entries()) row.syncId ??= row.id || `legacy:extra:${trip.syncId}:${recipeId}:${index}`;
+      }
+      for (const [index,entry] of (next.discardedTrips || []).entries()) { ensure(entry,'discardedTrips',index); if (entry.trip) { ensure(entry.trip,'trips'); entry.trip.syncId ??= entry.syncId; } }
+      next.recycleBin ??= []; next.syncFormat = 6; return next;
     }
     async persist() { await this.storage.set(this.key, this.record); }
     async backup(state) {
@@ -146,13 +169,16 @@
     }
     entity(before, after, collection, id, output) {
       const target = `entity:${collection}:${id}`;
-      if (after === undefined) { output.push(this.op(target, [], null, true)); return; }
+      const lifecycleTarget = `lifecycle:${collection}:${id}`;
+      const seenLifecycle = [...this.record.known, ...this.record.pending].some(operation => operation.target === lifecycleTarget && operation.value?.state === 'deleted');
+      if (after === undefined) { output.push(this.op(lifecycleTarget, [], { state: 'deleted', entity: clone(before) })); output.push(this.op(target, [], null, true)); return; }
+      if (before === undefined && seenLifecycle) output.push(this.op(lifecycleTarget, [], { state: 'restored' }));
       const old = before || {};
       if (collection === 'trips') {
         for (const field of ['items', 'shopping']) {
           const oldRows = new Map((old[field] || []).map((value, index) => [rowId(field, value, index), value]));
           const newRows = new Map((after[field] || []).map((value, index) => [rowId(field, value, index), value]));
-          new Set([...oldRows.keys(), ...newRows.keys()]).forEach(row => this.walk(oldRows.get(row), newRows.get(row), `row:trips:${id}:${field}:${row}`, [], output));
+          new Set([...oldRows.keys(), ...newRows.keys()]).forEach(row => { const rowTarget=`row:trips:${id}:${field}:${row}`, lifecycle=`lifecycle:row:${id}:${field}:${row}`, oldRow=oldRows.get(row), newRow=newRows.get(row); const deletedBefore=[...this.record.known,...this.record.pending].some(operation=>operation.target===lifecycle&&operation.value?.state==='deleted'); if(oldRow!==undefined&&newRow===undefined)output.push(this.op(lifecycle,[],{state:'deleted',row:clone(oldRow)})); if(oldRow===undefined&&newRow!==undefined&&deletedBefore)output.push(this.op(lifecycle,[],{state:'restored'})); this.walk(oldRow,newRow,rowTarget,[],output); });
         }
         const oldOverrides = old.overrides || { added: [], removed: [] };
         const newOverrides = after.overrides || { added: [], removed: [] };
@@ -185,6 +211,10 @@
     apply(bundle, operation) {
       const meta = bundle.meta ||= { clocks: {}, tombstones: {} }; const data = bundle.data ||= {};
       const target = operation.target; const path = operation.path || []; const tombstone = meta.tombstones[target];
+      meta.lifecycle ??= {};
+      if (String(target).startsWith('lifecycle:')) { const key=lifecycleKey(target), previous=meta.lifecycle[key]; if(!previous||compareOperations(operation,previous.operation)>0)meta.lifecycle[key]={state:operation.value?.state||'deleted',operation}; return; }
+      const life=lifecycleKey(target), partsForLife=String(target).split(':'), parentTripLifecycle=(partsForLife[0]==='row'||partsForLife[0]==='override')?meta.lifecycle[`trips:${partsForLife[2]}`]:null, lifecycle=parentTripLifecycle||(life&&meta.lifecycle[life]);
+      if (lifecycle && lifecycle.state !== 'restored' && !operation.deleted) return;
       // Store the full operation, not just its clock.  That preserves the
       // server-sequence fallback when two malformed/legacy operations happen
       // to have an identical HLC and device ID.
@@ -242,7 +272,7 @@
       const base = snapshots[snapshots.length - 1];
       if (base) this.apply(bundle, base);
       ordered.filter(operation => operation.target !== 'snapshot').forEach(operation => this.apply(bundle, operation));
-      return syncable(bundle.data);
+      return syncable(this.migrateState(bundle.data));
     }
     compactPending() {
       const latest = new Map();
@@ -254,7 +284,7 @@
       this.record.pending = [...latest.values()].sort(compareOperations);
     }
     queue(after) {
-      const next = syncable(after); const prior = this.record.snapshot;
+      const next = syncable(this.migrateState(after)); const prior = this.record.snapshot && this.migrateState(this.record.snapshot);
       const operations = this.build(prior, next); if (!operations.length) return false;
       this.record.pending.push(...operations);
       const createdAt = Date.now();
@@ -296,7 +326,11 @@
       if (rebased.length) this.compactPending();
       return rebased;
     }
-    async exchange(operations, initialDocument = null) { const rows = await this.request('/rest/v1/rpc/sync_camp_operations', { method: 'POST', body: JSON.stringify({ p_operations: operations, p_materialized: initialDocument }) }); return Array.isArray(rows) ? rows[0] : rows; }
+    async exchange(operations, initialDocument = null) {
+      const call = payload => this.request('/rest/v1/rpc/sync_camp_operations', { method: 'POST', body: JSON.stringify(payload) });
+      try { const rows = await call({ p_operations: operations, p_materialized: initialDocument, p_protocol: 6 }); return Array.isArray(rows) ? rows[0] : rows; }
+      catch (error) { if (!/p_protocol|sync_camp_operations/i.test(String(error.message))) throw error; const rows = await call({ p_operations: operations, p_materialized: initialDocument }); return Array.isArray(rows) ? rows[0] : rows; }
+    }
     async sync(getState, replaceState) {
       if (!hasConfig || !this.signedIn() || this.running || !navigator.onLine) return false;
       this.running = true;
