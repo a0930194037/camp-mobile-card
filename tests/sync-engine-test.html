@@ -49,6 +49,19 @@
     ]);
     assert(serverTime.trips[0].items[0].checked === true, 'server time lost to a skewed legacy clock');
 
+    // A stale poll can arrive just after the user's operation was acknowledged.
+    // The short local write fence must reissue the visible intent rather than
+    // make the user click the same checkbox a second time.
+    const fenced = await create();
+    fenced.record.snapshot = { trips: [{ id: 'trip-5', items: [{ gearId: 'gear-5', checked: false }] }] };
+    fenced.queue({ trips: [{ id: 'trip-5', items: [{ gearId: 'gear-5', checked: true }] }] });
+    const fenceKey = Object.keys(fenced.record.intents)[0];
+    const acknowledgedLocal = fenced.record.pending[0];
+    fenced.record.pending = [];
+    const staleReply = { operationId: 'late-poll-false', deviceId: 'desktop', clock: { ms: acknowledgedLocal.clock.ms + 1, counter: 0, deviceId: 'desktop' }, target: acknowledgedLocal.target, path: ['checked'], value: false, deleted: false };
+    const retried = fenced.rebaseRecentIntents([acknowledgedLocal, staleReply]);
+    assert(retried.length === 1 && fenced.record.intents[fenceKey].operationId === retried[0].operationId, 'acknowledged local checkbox was not write-fenced');
+
     // Deleting a checklist row must never turn into deletion of its parent trip.
     const rows = await create();
     const rowResult = rows.materialize([
@@ -66,7 +79,7 @@
       { operationId: 'legacy-snapshot', deviceId: 'desktop', clock: { ms: 999999, counter: 0, deviceId: 'desktop' }, target: 'snapshot', path: [], value: { trips: [{ id: 'trip-4', items: [{ gearId: 'gear-4', checked: false }] }] }, deleted: false, serverSeq: 2 }
     ]);
     assert(snapshotResult.trips[0].items[0].checked === true, 'legacy snapshot overwrote a granular checkbox change');
-    output.textContent = 'PASS: 6 sync race checks';
+    output.textContent = 'PASS: 7 sync race checks';
   } catch (error) {
     output.textContent = `FAIL: ${error.message}`;
     throw error;

@@ -1412,7 +1412,7 @@ addToTripDialog = function filteredAddToTripDialog() {
   if (!currentTrip) return;
   const tripId = currentTrip.id;
   let filter = 'all';
-  const dialogRoot = dialog(`<h2>手動加入裝備</h2><div class="gear-filter manual-gear-filter"><label for="manual-gear-filter">顯示分類</label><select id="manual-gear-filter"><option value="all">全部裝備</option><option value="favorite">★ 我的最愛</option>${categories.map(category => `<option value="${esc(category)}">${esc(category)}</option>`).join('')}</select></div><p id="manual-gear-count" class="sub"></p><div id="manual-gear-list" class="list"></div><div class="actions"><button class="primary" id="add-items">加入</button><button class="secondary" id="cancel">取消</button></div>`);
+  const dialogRoot = dialog(`<form id="manual-add-form"><h2>手動加入裝備</h2><div class="gear-filter manual-gear-filter"><label for="manual-gear-filter">顯示分類</label><select id="manual-gear-filter"><option value="all">全部裝備</option><option value="favorite">★ 我的最愛</option>${categories.map(category => `<option value="${esc(category)}">${esc(category)}</option>`).join('')}</select></div><p id="manual-gear-count" class="sub"></p><div id="manual-gear-list" class="list"></div><div class="actions"><button type="submit" class="primary" id="add-items">加入</button><button type="button" class="secondary" id="cancel">取消</button></div></form>`);
   const availableGear = () => state.gear
     .filter(gear => !currentTrip.items.some(itemData => itemData.gearId === gear.id))
     .filter(gear => filter === 'all' || filter === 'favorite' ? (filter !== 'favorite' || gear.favorite) : gear.category === filter)
@@ -1426,7 +1426,8 @@ addToTripDialog = function filteredAddToTripDialog() {
   };
   $('#manual-gear-filter', dialogRoot).addEventListener('change', event => { filter = event.target.value; drawAvailable(); });
   $('#cancel', dialogRoot).onclick = closeDialog;
-  $('#add-items', dialogRoot).onclick = async () => {
+  $('#manual-add-form', dialogRoot).onsubmit = async event => {
+    event.preventDefault();
     const button = $('#add-items', dialogRoot);
     if (button.disabled) return;
     button.disabled = true;

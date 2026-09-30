@@ -254,8 +254,9 @@
       const next = syncable(after); const prior = this.record.snapshot;
       const operations = this.build(prior, next); if (!operations.length) return false;
       this.record.pending.push(...operations);
+      const createdAt = Date.now();
       for (const operation of operations) this.record.intents[clockKey(operation.target, operation.path || [])] = {
-        operationId: operation.operationId, clock: operation.clock, createdAt: Date.now(), rebasedAgainst: null
+        operationId: operation.operationId, clock: operation.clock, createdAt, protectUntil: createdAt + 12000, rebasedAgainst: null
       };
       this.compactPending(); this.record.snapshot = next; this.persist();
       this.onStatus('已離線儲存，等待同步'); clearTimeout(this.timer);
@@ -268,12 +269,16 @@
       // Reissue only a fresh, still-pending user intent after observing that
       // remote clock.  This preserves the last button/checkbox action without
       // reviving old offline edits hours later.
-      const graceMs = 30000;
       const pendingById = new Map(this.record.pending.map(operation => [operation.operationId, operation]));
       const rebased = [];
       for (const [key, intent] of Object.entries(this.record.intents || {})) {
-        if (!intent?.operationId || Date.now() - Number(intent.createdAt || 0) > graceMs) continue;
-        const local = pendingById.get(intent.operationId);
+        if (!intent?.operationId) continue;
+        if (Date.now() > Number(intent.protectUntil || (Number(intent.createdAt || 0) + 12000))) { delete this.record.intents[key]; continue; }
+        // Keep protecting the user's most recent click briefly after its
+        // acknowledgement. Some mobile browsers deliver an older poll result
+        // after the acknowledgement; without this fence that stale value can
+        // visibly undo the checkbox and force a second click.
+        const local = pendingById.get(intent.operationId) || (remote || []).find(operation => operation.operationId === intent.operationId);
         if (!local) continue;
         const newerRemote = (remote || []).filter(operation => operation.operationId !== local.operationId
           && clockKey(operation.target, operation.path || []) === key
@@ -282,7 +287,7 @@
         if (!newerRemote || intent.rebasedAgainst === newerRemote.operationId) continue;
         const replacement = this.op(local.target, local.path || [], local.value, local.deleted);
         this.record.pending.push(replacement);
-        this.record.intents[key] = { operationId: replacement.operationId, clock: replacement.clock, createdAt: intent.createdAt, rebasedAgainst: newerRemote.operationId };
+        this.record.intents[key] = { operationId: replacement.operationId, clock: replacement.clock, createdAt: intent.createdAt, protectUntil: intent.protectUntil || (Number(intent.createdAt || Date.now()) + 12000), rebasedAgainst: newerRemote.operationId };
         rebased.push(replacement);
       }
       if (rebased.length) this.compactPending();
@@ -313,7 +318,13 @@
         this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()];
         this.record.pending = unsent;
         const acknowledged = new Set(remote.map(operation => operation.operationId));
-        for (const [key, intent] of Object.entries(this.record.intents)) if (acknowledged.has(intent.operationId)) delete this.record.intents[key];
+        // Do not discard a just-acknowledged local intent immediately.  It is
+        // a short write fence against an out-of-order response; rebaseRecentIntents
+        // clears it after the protection window.
+        for (const [key, intent] of Object.entries(this.record.intents)) {
+          if (Date.now() > Number(intent.protectUntil || (Number(intent.createdAt || 0) + 12000))) delete this.record.intents[key];
+          else if (acknowledged.has(intent.operationId)) intent.acknowledgedAt = Date.now();
+        }
         this.record.snapshot = result; this.record.legacyPendingBackup = null;
         // Persist acknowledgement state before handing a materialized state to
         // the UI adapter.  The adapter can therefore distinguish an
