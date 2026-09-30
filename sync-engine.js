@@ -266,8 +266,12 @@
         // acknowledged merge from an old response racing a fresh local edit.
         await this.persist();
         replaceState(result);
-        this.onStatus(unsent.length ? '已儲存，等待下一次同步' : '已同步');
-        if (unsent.length) { clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); }
+        // `unsent` is a snapshot made before the storage await above.  A user
+        // can make another change during that await, so use the live queue for
+        // both status and the follow-up upload decision.
+        const waiting = this.record.pending.length;
+        this.onStatus(waiting ? '已儲存，等待下一次同步' : '已同步');
+        if (waiting) { clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 0); }
         return true;
       } catch (error) {
         if (/(401|jwt expired|expired|invalid jwt)/i.test(error.message) && await this.refresh()) { this.running = false; return this.sync(getState, replaceState); }
