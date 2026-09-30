@@ -207,6 +207,12 @@
   placeSyncLight();
   if (sync.signedIn()) {
     await runSync();
-    setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 1000);
+    // Keep an active phone and desktop close together without waiting for the
+    // old one-second poll after returning to the app or regaining signal.
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') runSync(); };
+    setInterval(refreshWhenVisible, 250);
+    window.addEventListener('online', refreshWhenVisible);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
   }
 })();
