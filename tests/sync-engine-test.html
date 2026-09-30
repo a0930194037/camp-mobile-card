@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Camp sync engine checks</title>
+<pre id="result">Running…</pre>
+<script>globalThis.CAMP_SYNC_CONFIG={url:'https://example.invalid',publishableKey:'test'};</script>
+<script src="../sync-engine.js?v=43"></script>
+<script>
+(async () => {
+  const output = document.querySelector('#result');
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const storage = { value: null, async get() { return this.value; }, async set(_key, value) { this.value = structuredClone(value); } };
+  const create = async () => { const sync = new CampSync(storage, `test-${crypto.randomUUID()}`); await sync.load(); return sync; };
+  try {
+    // A click made before the first remote pull must be rebased after a faster
+    // remote clock is observed, so the user's fresh intent remains checked.
+    const sync = await create();
+    sync.record.snapshot = { trips: [{ id: 'trip-1', items: [{ gearId: 'gear-1', checked: false }] }] };
+    sync.queue({ trips: [{ id: 'trip-1', items: [{ gearId: 'gear-1', checked: true }] }] });
+    const first = sync.record.pending[0];
+    const serverReceivedAt = new Date(first.clock.ms + 2000).toISOString();
+    const remote = { operationId: 'remote-false', deviceId: 'fast-device', clock: { ms: first.clock.ms + 1000, counter: 0, deviceId: 'fast-device' }, occurredAt: new Date(first.clock.ms + 1000).toISOString(), serverReceivedAt, target: 'row:trips:trip-1:items:gear-1', path: ['checked'], value: false, deleted: false, serverSeq: 1 };
+    sync.observeRemoteClock([remote]);
+    const replacements = sync.rebaseRecentIntents([remote]);
+    assert(replacements.length === 1, 'fresh local intent was not rebased');
+    const rebased = replacements[0];
+    assert(rebased.clock.ms >= Date.parse(serverReceivedAt), 'server standard time did not calibrate the local clock');
+    assert(sync.materialize([remote, ...sync.record.pending]).trips[0].items[0].checked === true, 'rebased checkbox did not remain checked');
+
+    // The server receipt sequence must settle otherwise-identical legacy clocks.
+    const tied = await create();
+    const identical = { ms: 7, counter: 0, deviceId: 'legacy' };
+    const target = 'row:trips:trip-2:items:gear-2';
+    const result = tied.materialize([
+      { operationId: 'tie-a', deviceId: 'legacy', clock: identical, target, path: ['checked'], value: false, deleted: false, serverSeq: 1 },
+      { operationId: 'tie-b', deviceId: 'legacy', clock: identical, target, path: ['checked'], value: true, deleted: false, serverSeq: 2 }
+    ]);
+    assert(result.trips[0].items[0].checked === true, 'server sequence did not settle identical clocks');
+
+    // Deleting a checklist row must never turn into deletion of its parent trip.
+    const rows = await create();
+    const rowResult = rows.materialize([
+      { operationId: 'trip', deviceId: 'a', clock: { ms: 1, counter: 0, deviceId: 'a' }, target: 'entity:trips:trip-3', path: [], value: { id: 'trip-3', name: 'Trip' }, deleted: false, serverSeq: 1 },
+      { operationId: 'item', deviceId: 'a', clock: { ms: 2, counter: 0, deviceId: 'a' }, target: 'row:trips:trip-3:items:gear-3', path: [], value: { gearId: 'gear-3', checked: false }, deleted: false, serverSeq: 2 },
+      { operationId: 'remove-item', deviceId: 'a', clock: { ms: 3, counter: 0, deviceId: 'a' }, target: 'row:trips:trip-3:items:gear-3', path: [], value: null, deleted: true, serverSeq: 3 }
+    ]);
+    assert(rowResult.trips.length === 1 && rowResult.trips[0].items.length === 0, 'row deletion removed its parent trip');
+    output.textContent = 'PASS: 3 sync race checks';
+  } catch (error) {
+    output.textContent = `FAIL: ${error.message}`;
+    throw error;
+  }
+})();
+</script>

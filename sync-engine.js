@@ -59,7 +59,7 @@
   class CampSync {
     constructor(storage, key = 'camp-sync.v1') {
       this.storage = storage; this.key = key; this.deviceId = uid(); this.timer = null; this.running = false;
-      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, pending: [], known: [], snapshot: null, syncVersion: 5, backups: [], intents: {} };
+      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, serverTimeMs: 0, pending: [], known: [], snapshot: null, syncVersion: 5, backups: [], intents: {} };
       this.onStatus = () => {}; this.onQueue = () => {};
     }
     async load() {
@@ -107,10 +107,12 @@
       const remote = (operations || []).map(operation => operation?.clock).filter(Boolean)
         .reduce((latest, clock) => !latest || cmp(clock, latest) > 0 ? clock : latest, null);
       const local = this.record.clock || { ms: 0, counter: 0 };
+      const serverTimeMs = Math.max(Number(this.record.serverTimeMs || 0), ...(operations || []).map(operation => Date.parse(operation?.serverReceivedAt || '') || 0));
+      this.record.serverTimeMs = serverTimeMs;
       if (!remote) return local;
       const localMs = Number(local.ms || 0), localCounter = Number(local.counter || 0);
       const remoteMs = Number(remote.ms || 0), remoteCounter = Number(remote.counter || 0);
-      const ms = Math.max(Date.now(), localMs, remoteMs);
+      const ms = Math.max(Date.now(), serverTimeMs, localMs, remoteMs);
       const counter = ms === localMs && ms === remoteMs ? Math.max(localCounter, remoteCounter) + 1
         : ms === localMs ? localCounter + 1
           : ms === remoteMs ? remoteCounter + 1 : 0;
@@ -118,7 +120,7 @@
     }
     nextClock() {
       const old = this.record.clock || {}; const now = Date.now();
-      const oldMs = Number(old.ms || 0), ms = Math.max(now, oldMs);
+      const oldMs = Number(old.ms || 0), ms = Math.max(now, Number(this.record.serverTimeMs || 0), oldMs);
       const counter = ms === oldMs ? Number(old.counter || 0) + 1 : 0;
       return this.record.clock = { ms, counter };
     }
