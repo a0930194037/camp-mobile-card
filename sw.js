@@ -1,5 +1,5 @@
-const CACHE = 'camp-mobile-card-v6';
-const APP_FILES = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
+const CACHE = 'camp-mobile-card-v7';
+const APP_FILES = ['./', './index.html', './app.js', './sync-config.js', './sync-engine.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));
