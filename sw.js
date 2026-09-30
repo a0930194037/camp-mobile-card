@@ -1,4 +1,4 @@
-const CACHE = 'camp-mobile-card-v5';
+const CACHE = 'camp-mobile-card-v6';
 const APP_FILES = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => {
