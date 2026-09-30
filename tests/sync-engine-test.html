@@ -3,7 +3,7 @@
 <title>Camp sync engine checks</title>
 <pre id="result">Running…</pre>
 <script>globalThis.CAMP_SYNC_CONFIG={url:'https://example.invalid',publishableKey:'test'};</script>
-<script src="../sync-engine.js?v=44"></script>
+<script src="../sync-engine.js?v=45"></script>
 <script>
 (async () => {
   const output = document.querySelector('#result');
@@ -26,7 +26,8 @@
     assert(rebased.clock.ms >= Date.parse(serverReceivedAt), 'server standard time did not calibrate the local clock');
     assert(sync.materialize([remote, ...sync.record.pending]).trips[0].items[0].checked === true, 'rebased checkbox did not remain checked');
 
-    // The server receipt sequence must settle otherwise-identical legacy clocks.
+    // Receipt sequence is the shared authority after receipt, even if one
+    // device had a wildly skewed wall clock.
     const tied = await create();
     const identical = { ms: 7, counter: 0, deviceId: 'legacy' };
     const target = 'row:trips:trip-2:items:gear-2';
@@ -35,6 +36,12 @@
       { operationId: 'tie-b', deviceId: 'legacy', clock: identical, target, path: ['checked'], value: true, deleted: false, serverSeq: 2 }
     ]);
     assert(result.trips[0].items[0].checked === true, 'server sequence did not settle identical clocks');
+
+    const skewed = tied.materialize([
+      { operationId: 'wrong-clock-old-receipt', deviceId: 'fast-clock-device', clock: { ms: 999999999999, counter: 0, deviceId: 'fast-clock-device' }, target, path: ['checked'], value: false, deleted: false, serverSeq: 10 },
+      { operationId: 'later-real-click', deviceId: 'phone', clock: { ms: 1, counter: 0, deviceId: 'phone' }, target, path: ['checked'], value: true, deleted: false, serverSeq: 11 }
+    ]);
+    assert(skewed.trips[0].items[0].checked === true, 'later server-received click lost to a skewed device clock');
 
     // Deleting a checklist row must never turn into deletion of its parent trip.
     const rows = await create();
@@ -53,7 +60,7 @@
       { operationId: 'legacy-snapshot', deviceId: 'desktop', clock: { ms: 999999, counter: 0, deviceId: 'desktop' }, target: 'snapshot', path: [], value: { trips: [{ id: 'trip-4', items: [{ gearId: 'gear-4', checked: false }] }] }, deleted: false, serverSeq: 2 }
     ]);
     assert(snapshotResult.trips[0].items[0].checked === true, 'legacy snapshot overwrote a granular checkbox change');
-    output.textContent = 'PASS: 4 sync race checks';
+    output.textContent = 'PASS: 5 sync race checks';
   } catch (error) {
     output.textContent = `FAIL: ${error.message}`;
     throw error;

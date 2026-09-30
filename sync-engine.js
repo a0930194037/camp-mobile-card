@@ -24,11 +24,17 @@
     }
     return String(left.deviceId || '').localeCompare(String(right.deviceId || ''));
   };
-  // The server sequence is deliberately only a last-resort tie breaker.  The
-  // Hybrid Logical Clock remains the authority for conflicting user edits.
-  const compareOperations = (left, right) => cmp(left?.clock, right?.clock)
-    || Number(left?.serverSeq || 0) - Number(right?.serverSeq || 0)
-    || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
+  // Once both operations have reached Supabase, its receipt sequence is the
+  // shared clock. A phone and a PC cannot agree on wall clocks, so a skewed
+  // device must never let an old change defeat a later click. Before receipt,
+  // HLC still orders offline work and protects the local intent.
+  const compareOperations = (left, right) => {
+    const leftSeq = Number(left?.serverSeq || 0), rightSeq = Number(right?.serverSeq || 0);
+    if (leftSeq && rightSeq && leftSeq !== rightSeq) return leftSeq - rightSeq;
+    return cmp(left?.clock, right?.clock)
+      || leftSeq - rightSeq
+      || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
+  };
   const clockKey = (target, path) => `${target}/${path.map(encodeURIComponent).join('/')}`;
   const legacyApply = (base, batches) => {
     let result = clone(base || {});
