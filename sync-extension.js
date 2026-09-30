@@ -67,7 +67,10 @@
       };
       state = { ...next, ...view };
       await nativeSave();
-      if (!appliedInitialRemoteState) { appliedInitialRemoteState = true; render(); }
+      // Refresh the current page with the merged data, but never while a form
+      // is open. Navigation is preserved above, so this cannot jump home.
+      if (!document.querySelector('.dialog')) render();
+      appliedInitialRemoteState = true;
     }
     finally { applyingRemote = false; }
   }
@@ -76,6 +79,7 @@
     setStatus('正在確認同步狀態');
     return sync.sync(() => state, replaceState);
   }
+  sync.onQueue = runSync;
 
   function syncSettingsMarkup() {
     const email = sync.record.session?.user?.email || '';
@@ -122,5 +126,8 @@
   const plannerRender = render;
   render = function renderWithSyncLight() { plannerRender(); placeSyncLight(); };
   placeSyncLight();
-  if (sync.signedIn()) { await runSync(); setInterval(runSync, 15000); }
+  if (sync.signedIn()) {
+    await runSync();
+    setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 4000);
+  }
 })();

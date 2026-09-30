@@ -88,6 +88,7 @@
       this.deviceId = id();
       this.record = { session: null, baseline: null, pending: [], remoteVersion: 0, mergeVersion: 2 };
       this.onStatus = () => {};
+      this.onQueue = () => {};
       this.timer = null;
       this.running = false;
     }
@@ -158,7 +159,10 @@
       if (this.record.baseline == null) this.record.baseline = syncable(before);
       this.persist();
       this.onStatus('已離線儲存，等待同步');
-      clearTimeout(this.timer); this.timer = setTimeout(() => this.sync().catch(() => {}), 450);
+      // The UI adapter supplies the state-aware sync callback. Calling this
+      // engine's sync() directly would omit getState/replaceState and leave
+      // edits waiting for the slow polling fallback.
+      clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 120);
     }
     async pull() {
       const rows = await this.request('/rest/v1/camp_documents?select=version,data,updated_at&limit=1');
