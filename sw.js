@@ -1,4 +1,4 @@
-const CACHE = 'camp-mobile-card-v7';
+const CACHE = 'camp-mobile-card-v8';
 const APP_FILES = ['./', './index.html', './app.js', './sync-config.js', './sync-engine.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => {
@@ -18,6 +18,13 @@ self.addEventListener('fetch', event => {
   // card from being stuck on an old UI after a GitHub Pages update.
   if (event.request.mode === 'navigate') {
     event.respondWith(fetch(event.request).then(updateCache).catch(() => caches.match(event.request).then(cached => cached || caches.match('./'))));
+    return;
+  }
+  // JavaScript must also be network-first: an older cached app.js can be
+  // incompatible with a freshly fetched index.html and leave buttons inert.
+  const isAppCode = /\/(app|sync-config|sync-engine)\.js(?:\?|$)/.test(new URL(event.request.url).pathname);
+  if (isAppCode) {
+    event.respondWith(fetch(event.request).then(updateCache).catch(() => caches.match(event.request)));
     return;
   }
   event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(updateCache)));
