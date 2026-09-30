@@ -208,6 +208,7 @@
       message.textContent = '處理中…';
       if (kind === 'signup') await sync.signUp(email, password); else await sync.signIn(email, password);
       await runSync();
+      await sync.startRealtime(() => runSync());
       const settings = root.closest('.dialog');
       settings?.remove();
       openSettingsDialog();
@@ -247,10 +248,11 @@
   placeSyncLight();
   if (sync.signedIn()) {
     await runSync();
+    await sync.startRealtime(() => runSync());
     // Keep an active phone and desktop close together without waiting for the
     // old one-second poll after returning to the app or regaining signal.
     const refreshWhenVisible = () => { if (document.visibilityState === 'visible') runSync(); };
-    setInterval(refreshWhenVisible, 250);
+    setInterval(refreshWhenVisible, 30000);
     window.addEventListener('online', refreshWhenVisible);
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);

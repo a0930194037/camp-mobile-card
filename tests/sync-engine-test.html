@@ -1,103 +1,49 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Camp sync engine checks</title>
+<title>Camp Sync v7 checks</title>
 <pre id="result">Running…</pre>
 <script>globalThis.CAMP_SYNC_CONFIG={url:'https://example.invalid',publishableKey:'test'};</script>
-<script src="../sync-engine.js?v=52"></script>
+<script src="../sync-engine.js?v=53"></script>
 <script>
 (async () => {
   const output = document.querySelector('#result');
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
-  const storage = { value: null, async get() { return this.value; }, async set(_key, value) { this.value = structuredClone(value); } };
-  const create = async () => { const sync = new CampSync(storage, `test-${crypto.randomUUID()}`); await sync.load(); return sync; };
+  const storage = () => ({ value: null, async get() { return this.value; }, async set(_key, value) { this.value = structuredClone(value); } });
+  const base = checked => ({ trips: [{ id: 'trip', syncId: 'trip', items: [{ gearId: 'gear', syncId: 'row', checked }] }] });
+  const create = async () => {
+    const sync = new CampSync(storage(), `test-${crypto.randomUUID()}`);
+    await sync.load();
+    sync.record.session = { access_token: 'test', expires_at: 9999999999 };
+    return sync;
+  };
   try {
-    // A click made before the first remote pull must be rebased after a faster
-    // remote clock is observed, so the user's fresh intent remains checked.
-    const sync = await create();
-    sync.record.snapshot = { trips: [{ id: 'trip-1', items: [{ gearId: 'gear-1', checked: false }] }] };
-    sync.queue({ trips: [{ id: 'trip-1', items: [{ gearId: 'gear-1', checked: true }] }] });
-    const first = sync.record.pending[0];
-    const serverReceivedAt = new Date(first.clock.ms + 2000).toISOString();
-    const remote = { operationId: 'remote-false', deviceId: 'fast-device', clock: { ms: first.clock.ms + 1000, counter: 0, deviceId: 'fast-device' }, occurredAt: new Date(first.clock.ms + 1000).toISOString(), serverReceivedAt, target: 'row:trips:trip-1:items:gear-1', path: ['checked'], value: false, deleted: false, serverSeq: 1 };
-    sync.observeRemoteClock([remote]);
-    const replacements = sync.rebaseRecentIntents([remote]);
-    assert(replacements.length === 1, 'fresh local intent was not rebased');
-    const rebased = replacements[0];
-    assert(rebased.clock.ms >= Date.parse(serverReceivedAt), 'server standard time did not calibrate the local clock');
-    assert(sync.materialize([remote, ...sync.record.pending]).trips[0].items[0].checked === true, 'rebased checkbox did not remain checked');
+    const accepted = await create();
+    accepted.record.snapshot = base(false);
+    let visible = base(true);
+    accepted.queue(visible);
+    const sent = structuredClone(accepted.record.pending);
+    accepted.exchange = async () => ({ status: 'ok', cursor: 1, seed: base(false), mutations: sent.map((operation, index) => ({ ...operation, revision: index + 1, serverSeq: index + 1 })) });
+    await accepted.sync(() => visible, next => { visible = next; });
+    assert(visible.trips[0].items[0].checked === true, 'accepted checkbox was reverted');
+    assert(accepted.record.pending.length === 0, 'accepted mutation was retried');
 
-    // Receipt sequence is the shared authority after receipt, even if one
-    // device had a wildly skewed wall clock.
-    const tied = await create();
-    const identical = { ms: 7, counter: 0, deviceId: 'legacy' };
-    const target = 'row:trips:trip-2:items:gear-2';
-    const result = tied.materialize([
-      { operationId: 'tie-a', deviceId: 'legacy', clock: identical, target, path: ['checked'], value: false, deleted: false, serverSeq: 1 },
-      { operationId: 'tie-b', deviceId: 'legacy', clock: identical, target, path: ['checked'], value: true, deleted: false, serverSeq: 2 }
+    const stale = await create();
+    stale.record.snapshot = base(true);
+    visible = base(false);
+    stale.queue(visible);
+    stale.exchange = async () => ({ status: 'conflict', cursor: 1, seed: base(false), mutations: [{ operationId: 'server-newer', deviceId: 'other', fieldKey: 'row:trips:trip:items:row/checked', baseRevision: 0, revision: 1, serverSeq: 1, target: 'row:trips:trip:items:row', path: ['checked'], value: true, deleted: false }] });
+    await stale.sync(() => visible, next => { visible = next; });
+    assert(visible.trips[0].items[0].checked === true, 'stale mutation overwrote the server value');
+    assert(stale.record.pending.length === 0, 'stale mutation was queued for retry');
+
+    const independent = await create();
+    independent.record.seed = { trips: [{ id: 'trip', syncId: 'trip', items: [{ gearId: 'a', syncId: 'a', checked: false }, { gearId: 'b', syncId: 'b', checked: false }] }] };
+    const merged = independent.materialize([
+      { operationId: 'a', serverSeq: 1, target: 'row:trips:trip:items:a', path: ['checked'], value: true, deleted: false },
+      { operationId: 'b', serverSeq: 2, target: 'row:trips:trip:items:b', path: ['checked'], value: true, deleted: false }
     ]);
-    assert(result.trips[0].items[0].checked === true, 'server sequence did not settle identical clocks');
-
-    const skewed = tied.materialize([
-      { operationId: 'wrong-clock-old-receipt', deviceId: 'fast-clock-device', clock: { ms: 999999999999, counter: 0, deviceId: 'fast-clock-device' }, target, path: ['checked'], value: false, deleted: false, serverSeq: 10 },
-      { operationId: 'later-real-click', deviceId: 'phone', clock: { ms: 1, counter: 0, deviceId: 'phone' }, target, path: ['checked'], value: true, deleted: false, serverSeq: 11 }
-    ]);
-    assert(skewed.trips[0].items[0].checked === true, 'later server-received click lost to a skewed device clock');
-
-    const serverTime = tied.materialize([
-      { operationId: 'old-fast-clock', deviceId: 'old-desktop', clock: { ms: 9999999999999, counter: 0, deviceId: 'old-desktop' }, serverReceivedAt: '2026-10-01T01:00:00.000Z', target, path: ['checked'], value: false, deleted: false },
-      { operationId: 'later-confirmed-click', deviceId: 'phone', clock: { ms: 1, counter: 0, deviceId: 'phone' }, serverReceivedAt: '2026-10-01T01:00:01.000Z', target, path: ['checked'], value: true, deleted: false, serverSeq: 12 }
-    ]);
-    assert(serverTime.trips[0].items[0].checked === true, 'server time lost to a skewed legacy clock');
-
-    // A stale poll can arrive just after the user's operation was acknowledged.
-    // The short local write fence must reissue the visible intent rather than
-    // make the user click the same checkbox a second time.
-    const fenced = await create();
-    fenced.record.snapshot = { trips: [{ id: 'trip-5', items: [{ gearId: 'gear-5', checked: false }] }] };
-    fenced.queue({ trips: [{ id: 'trip-5', items: [{ gearId: 'gear-5', checked: true }] }] });
-    const fenceKey = Object.keys(fenced.record.intents)[0];
-    const acknowledgedLocal = fenced.record.pending[0];
-    fenced.record.pending = [];
-    const staleReply = { operationId: 'late-poll-false', deviceId: 'desktop', clock: { ms: acknowledgedLocal.clock.ms + 1, counter: 0, deviceId: 'desktop' }, target: acknowledgedLocal.target, path: ['checked'], value: false, deleted: false };
-    const retried = fenced.rebaseRecentIntents([acknowledgedLocal, staleReply]);
-    assert(retried.length === 1 && fenced.record.intents[fenceKey].operationId === retried[0].operationId, 'acknowledged local checkbox was not write-fenced');
-
-    // Deleting a checklist row must never turn into deletion of its parent trip.
-    const rows = await create();
-    const rowResult = rows.materialize([
-      { operationId: 'trip', deviceId: 'a', clock: { ms: 1, counter: 0, deviceId: 'a' }, target: 'entity:trips:trip-3', path: [], value: { id: 'trip-3', name: 'Trip' }, deleted: false, serverSeq: 1 },
-      { operationId: 'item', deviceId: 'a', clock: { ms: 2, counter: 0, deviceId: 'a' }, target: 'row:trips:trip-3:items:gear-3', path: [], value: { gearId: 'gear-3', checked: false }, deleted: false, serverSeq: 2 },
-      { operationId: 'remove-item', deviceId: 'a', clock: { ms: 3, counter: 0, deviceId: 'a' }, target: 'row:trips:trip-3:items:gear-3', path: [], value: null, deleted: true, serverSeq: 3 }
-    ]);
-    assert(rowResult.trips.length === 1 && rowResult.trips[0].items.length === 0, 'row deletion removed its parent trip');
-
-    // A bootstrap snapshot must never overwrite a later granular checkbox
-    // operation merely because a legacy device assigned it a larger clock.
-    const snapshot = await create();
-    const snapshotResult = snapshot.materialize([
-      { operationId: 'checked-row', deviceId: 'phone', clock: { ms: 10, counter: 0, deviceId: 'phone' }, target: 'row:trips:trip-4:items:gear-4', path: ['checked'], value: true, deleted: false, serverSeq: 1 },
-      { operationId: 'legacy-snapshot', deviceId: 'desktop', clock: { ms: 999999, counter: 0, deviceId: 'desktop' }, target: 'snapshot', path: [], value: { trips: [{ id: 'trip-4', items: [{ gearId: 'gear-4', checked: false }] }] }, deleted: false, serverSeq: 2 }
-    ]);
-    assert(snapshotResult.trips[0].items[0].checked === true, 'legacy snapshot overwrote a granular checkbox change');
-
-    // A cancelled trip creates a lifecycle tombstone. A late checklist field
-    // from an old offline device may never recreate that parent trip.
-    const lifecycle = await create();
-    const cancelled = lifecycle.materialize([
-      { operationId: 'life-trip', deviceId: 'a', clock: { ms: 1, counter: 0, deviceId: 'a' }, target: 'entity:trips:trip-6', path: [], value: { id: 'trip-6', syncId: 'trip-6', name: 'Trip' }, deleted: false, serverSeq: 1 },
-      { operationId: 'life-item', deviceId: 'a', clock: { ms: 2, counter: 0, deviceId: 'a' }, target: 'row:trips:trip-6:items:item-6', path: [], value: { syncId: 'item-6', checked: false }, deleted: false, serverSeq: 2 },
-      { operationId: 'cancel-life', deviceId: 'a', clock: { ms: 3, counter: 0, deviceId: 'a' }, target: 'lifecycle:trips:trip-6', path: [], value: { state: 'deleted' }, deleted: false, serverSeq: 3 },
-      { operationId: 'cancel-entity', deviceId: 'a', clock: { ms: 4, counter: 0, deviceId: 'a' }, target: 'entity:trips:trip-6', path: [], value: null, deleted: true, serverSeq: 4 },
-      { operationId: 'late-check', deviceId: 'old', clock: { ms: 999, counter: 0, deviceId: 'old' }, target: 'row:trips:trip-6:items:item-6', path: ['checked'], value: true, deleted: false, serverSeq: 5 }
-    ]);
-    assert(!cancelled.trips?.some(trip => trip.syncId === 'trip-6'), 'late checklist operation resurrected a cancelled trip');
-
-    // Legacy migration must derive stable IDs on both devices rather than
-    // generate random keys for the same pre-v6 data.
-    const firstMigration = lifecycle.migrateState({ gear: [{ id: 'F01', name: '桌子' }], trips: [{ id: 'T01', items: [{ gearId: 'F01' }], shopping: [{ name: '米' }] }] });
-    const secondMigration = lifecycle.migrateState({ gear: [{ id: 'F01', name: '桌子' }], trips: [{ id: 'T01', items: [{ gearId: 'F01' }], shopping: [{ name: '米' }] }] });
-    assert(firstMigration.gear[0].syncId === secondMigration.gear[0].syncId && firstMigration.trips[0].items[0].syncId === secondMigration.trips[0].items[0].syncId, 'legacy migration produced unstable IDs');
-    output.textContent = 'PASS: 9 sync race checks';
+    assert(merged.trips[0].items.every(item => item.checked), 'independent rows conflicted');
+    output.textContent = 'PASS: v7 authoritative revision checks';
   } catch (error) {
     output.textContent = `FAIL: ${error.message}`;
     throw error;

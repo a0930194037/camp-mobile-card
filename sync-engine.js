@@ -32,22 +32,11 @@
     }
     return String(left.deviceId || '').localeCompare(String(right.deviceId || ''));
   };
-  // Once both operations have reached Supabase, received_at is the shared
-  // clock. Phones and PCs cannot agree on wall clocks, so a skewed device
-  // must never let an old change defeat a later click. server_seq settles the
-  // rare same-millisecond tie. Before receipt, HLC orders offline work.
+  // Only the database assigns a definitive order. The client never uses
+  // arrival time or a device clock to decide which value wins.
   const compareOperations = (left, right) => {
     const leftSeq = Number(left?.serverSeq || 0), rightSeq = Number(right?.serverSeq || 0);
-    const leftReceipt = Date.parse(left?.serverReceivedAt || '') || 0;
-    const rightReceipt = Date.parse(right?.serverReceivedAt || '') || 0;
-    if (leftReceipt && rightReceipt) return leftReceipt - rightReceipt
-      || leftSeq - rightSeq
-      || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
-    // Early v5 responses already carried server_seq but not received_at.
-    // Preserve their deterministic server ordering during that migration.
-    if (leftSeq && rightSeq && leftSeq !== rightSeq) return leftSeq - rightSeq;
-    return cmp(left?.clock, right?.clock)
-      || leftSeq - rightSeq
+    return leftSeq - rightSeq
       || String(left?.operationId || '').localeCompare(String(right?.operationId || ''));
   };
   const clockKey = (target, path) => `${target}/${path.map(encodeURIComponent).join('/')}`;
@@ -80,22 +69,21 @@
   class CampSync {
     constructor(storage, key = 'camp-sync.v1') {
       this.storage = storage; this.key = key; this.deviceId = uid(); this.timer = null; this.running = false;
-      this.record = { session: null, deviceId: this.deviceId, clock: { ms: 0, counter: 0 }, serverTimeMs: 0, pending: [], known: [], snapshot: null, syncVersion: 6, backups: [], intents: {}, protocol: 6 };
+      this.record = { session: null, deviceId: this.deviceId, pending: [], known: [], snapshot: null, seed: null, cursor: 0, revisions: {}, syncVersion: 7, backups: [], protocol: 7 };
       this.onStatus = () => {}; this.onQueue = () => {};
     }
     async load() {
       const old = await this.storage.get(this.key) || {};
-      this.record = { ...this.record, ...old, syncVersion: 6, protocol: 6 };
-      const legacy = (this.record.pending || []).filter(op => !(op?.operationId && op?.target));
-      if (legacy.length) this.record.legacyPendingBackup ??= legacy;
-      this.record.pending = (this.record.pending || []).filter(op => op?.operationId && op?.target);
-      this.record.known = (this.record.known || []).filter(op => op?.operationId && op?.target);
+      const isV7 = Number(old.protocol || 0) >= 7;
+      this.record = { ...this.record, ...old, syncVersion: 7, protocol: 7 };
+      if (!isV7) { this.record.backups = [...(old.backups || []), { createdAt: new Date().toISOString(), state: old.snapshot || null, reason: 'pre-v7-sync-migration' }].slice(-4); this.record.pending = []; this.record.known = []; this.record.snapshot = null; this.record.seed = null; this.record.cursor = 0; this.record.revisions = {}; }
+      this.record.pending = (this.record.pending || []).filter(op => op?.operationId && op?.target && Number.isFinite(Number(op.baseRevision)));
+      this.record.known = (this.record.known || []).filter(op => op?.operationId && op?.target && Number(op.serverSeq) > 0);
       this.record.backups ??= [];
-      this.record.intents ??= {};
+      this.record.revisions ??= {};
       this.deviceId = this.record.deviceId || this.deviceId; this.record.deviceId = this.deviceId;
       // A persisted operation history is also a remote history after a browser
       // restart.  Advance the HLC before the first new local mutation.
-      this.observeRemoteClock(this.record.known);
       await this.persist(); return this.record;
     }
     migrateState(state) {
@@ -111,7 +99,7 @@
         for (const [recipeId,entries] of Object.entries(trip.extraShopping || {})) for (const [index,row] of (entries || []).entries()) row.syncId ??= row.id || `legacy:extra:${trip.syncId}:${recipeId}:${index}`;
       }
       for (const [index,entry] of (next.discardedTrips || []).entries()) { ensure(entry,'discardedTrips',index); if (entry.trip) { ensure(entry.trip,'trips'); entry.trip.syncId ??= entry.syncId; } }
-      next.recycleBin ??= []; next.syncFormat = 6; return next;
+      next.recycleBin ??= []; next.syncFormat = 7; return next;
     }
     async persist() { await this.storage.set(this.key, this.record); }
     async backup(state) {
@@ -136,9 +124,11 @@
     async signUp(email, password) { const data = await this.authRequest('/auth/v1/signup', { method: 'POST', body: JSON.stringify({ email, password }) }); if (!data.session) throw new Error('帳號已建立；請完成 Email 驗證後再登入。'); this.record.session = data.session; await this.persist(); return data; }
     async signIn(email, password) { this.record.session = await this.authRequest('/auth/v1/token?grant_type=password', { method: 'POST', body: JSON.stringify({ email, password }) }); await this.persist(); return this.record.session; }
     async resendVerification(email) { await this.authRequest('/auth/v1/resend', { method: 'POST', body: JSON.stringify({ type: 'signup', email }) }); }
-    async signOut() { await this.request('/auth/v1/logout', { method: 'POST' }).catch(() => {}); this.record.session = null; await this.persist(); }
-    async refresh() { try { const token = this.record.session?.refresh_token; if (!token) return false; this.record.session = await this.authRequest('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: token }) }); await this.persist(); return true; } catch { return false; } }
+    async signOut() { await this.request('/auth/v1/logout', { method: 'POST' }).catch(() => {}); await this.stopRealtime(); this.record.session = null; await this.persist(); }
+    async refresh() { try { const token = this.record.session?.refresh_token; if (!token) return false; this.record.session = await this.authRequest('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: token }) }); await this.realtimeClient?.realtime.setAuth(this.record.session.access_token); await this.persist(); return true; } catch { return false; } }
     needsRefresh() { return Number(this.record.session?.expires_at || 0) <= Math.floor(Date.now() / 1000) + 60; }
+    async startRealtime(onMutation) { if (this.realtimeChannel || !this.signedIn() || !globalThis.supabase?.createClient) return !!this.realtimeChannel; const userId = this.record.session?.user?.id; if (!userId) return false; this.realtimeClient = globalThis.supabase.createClient(config.url, config.publishableKey, { auth: { persistSession: false, autoRefreshToken: false } }); await this.realtimeClient.realtime.setAuth(this.record.session.access_token); this.realtimeChannel = this.realtimeClient.channel(`camp-sync:${userId}`, { config: { private: true } }).on('broadcast', { event: 'mutation' }, () => Promise.resolve(onMutation()).catch(() => {})).subscribe(); return true; }
+    async stopRealtime() { if (this.realtimeChannel) await this.realtimeClient?.removeChannel(this.realtimeChannel).catch(() => {}); this.realtimeChannel = null; this.realtimeClient = null; }
     observeRemoteClock(operations) {
       const remote = (operations || []).map(operation => operation?.clock).filter(Boolean)
         .reduce((latest, clock) => !latest || cmp(clock, latest) > 0 ? clock : latest, null);
@@ -160,7 +150,7 @@
       const counter = ms === oldMs ? Number(old.counter || 0) + 1 : 0;
       return this.record.clock = { ms, counter };
     }
-    op(target, path, value, deleted = false) { const clock = this.nextClock(); return { operationId: uid(), deviceId: this.deviceId, clock: { ...clock, deviceId: this.deviceId }, occurredAt: new Date(clock.ms).toISOString(), target, path, value: clone(value), deleted }; }
+    op(target, path, value, deleted = false) { const fieldKey = clockKey(target, path); return { operationId: uid(), deviceId: this.deviceId, occurredAt: new Date().toISOString(), target, path, fieldKey, baseRevision: Number(this.record.revisions?.[fieldKey] || 0), value: clone(value), deleted }; }
     walk(before, after, target, path, output) {
       if (same(before, after)) return;
       const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -262,16 +252,8 @@
       if (operation.deleted) delete at[path[path.length - 1]]; else at[path[path.length - 1]] = clone(operation.value);
     }
     materialize(operations) {
-      const bundle = { data: {}, meta: { clocks: {}, tombstones: {} } };
-      const ordered = [...operations].sort(compareOperations);
-      // A snapshot is a migration/bootstrap base, never a competing user
-      // change. Applying a high-clock legacy snapshot after row operations
-      // used to erase a freshly checked box wholesale. Select the newest
-      // base once, then layer every granular operation over it.
-      const snapshots = ordered.filter(operation => operation.target === 'snapshot');
-      const base = snapshots[snapshots.length - 1];
-      if (base) this.apply(bundle, base);
-      ordered.filter(operation => operation.target !== 'snapshot').forEach(operation => this.apply(bundle, operation));
+      const bundle = { data: clone(this.record.seed || {}), meta: { clocks: {}, tombstones: {} } };
+      [...operations].filter(operation => operation.target !== 'snapshot').sort(compareOperations).forEach(operation => this.apply(bundle, operation));
       return syncable(this.migrateState(bundle.data));
     }
     compactPending() {
@@ -281,88 +263,35 @@
         if (operation.deleted && !(operation.path || []).length) for (const prior of [...latest.keys()]) if (prior.startsWith(`${operation.target}/`)) latest.delete(prior);
         latest.set(key, operation);
       }
-      this.record.pending = [...latest.values()].sort(compareOperations);
+      this.record.pending = [...latest.values()];
     }
     queue(after) {
       const next = syncable(this.migrateState(after)); const prior = this.record.snapshot && this.migrateState(this.record.snapshot);
       const operations = this.build(prior, next); if (!operations.length) return false;
       this.record.pending.push(...operations);
-      const createdAt = Date.now();
-      for (const operation of operations) this.record.intents[clockKey(operation.target, operation.path || [])] = {
-        operationId: operation.operationId, clock: operation.clock, createdAt, protectUntil: createdAt + 12000, rebasedAgainst: null
-      };
       this.compactPending(); this.record.snapshot = next; this.persist();
       this.onStatus('已離線儲存，等待同步'); clearTimeout(this.timer);
       this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 100); return true;
     }
-    rebaseRecentIntents(remote) {
-      // A user can act before the first pull completes.  In that short window
-      // their device has not yet observed a faster device's HLC, so the first
-      // local clock can legitimately sort behind an older *real-world* edit.
-      // Reissue only a fresh, still-pending user intent after observing that
-      // remote clock.  This preserves the last button/checkbox action without
-      // reviving old offline edits hours later.
-      const pendingById = new Map(this.record.pending.map(operation => [operation.operationId, operation]));
-      const rebased = [];
-      for (const [key, intent] of Object.entries(this.record.intents || {})) {
-        if (!intent?.operationId) continue;
-        if (Date.now() > Number(intent.protectUntil || (Number(intent.createdAt || 0) + 12000))) { delete this.record.intents[key]; continue; }
-        // Keep protecting the user's most recent click briefly after its
-        // acknowledgement. Some mobile browsers deliver an older poll result
-        // after the acknowledgement; without this fence that stale value can
-        // visibly undo the checkbox and force a second click.
-        const local = pendingById.get(intent.operationId) || (remote || []).find(operation => operation.operationId === intent.operationId);
-        if (!local) continue;
-        const newerRemote = (remote || []).filter(operation => operation.operationId !== local.operationId
-          && clockKey(operation.target, operation.path || []) === key
-          && compareOperations(operation, local) > 0)
-          .sort(compareOperations).pop();
-        if (!newerRemote || intent.rebasedAgainst === newerRemote.operationId) continue;
-        const replacement = this.op(local.target, local.path || [], local.value, local.deleted);
-        this.record.pending.push(replacement);
-        this.record.intents[key] = { operationId: replacement.operationId, clock: replacement.clock, createdAt: intent.createdAt, protectUntil: intent.protectUntil || (Number(intent.createdAt || Date.now()) + 12000), rebasedAgainst: newerRemote.operationId };
-        rebased.push(replacement);
-      }
-      if (rebased.length) this.compactPending();
-      return rebased;
-    }
-    async exchange(operations, initialDocument = null) {
-      const call = payload => this.request('/rest/v1/rpc/sync_camp_operations', { method: 'POST', body: JSON.stringify(payload) });
-      try { const rows = await call({ p_operations: operations, p_materialized: initialDocument, p_protocol: 6 }); return Array.isArray(rows) ? rows[0] : rows; }
-      catch (error) { if (!/p_protocol|sync_camp_operations/i.test(String(error.message))) throw error; const rows = await call({ p_operations: operations, p_materialized: initialDocument }); return Array.isArray(rows) ? rows[0] : rows; }
-    }
+    async exchange(mutations, seed = null) { return this.request('/rest/v1/rpc/apply_camp_mutations', { method: 'POST', body: JSON.stringify({ p_mutations: mutations, p_cursor: Number(this.record.cursor || 0), p_seed: seed, p_protocol: 7 }) }); }
+    async pull() { return this.request('/rest/v1/rpc/get_camp_sync_delta', { method: 'POST', body: JSON.stringify({ p_cursor: Number(this.record.cursor || 0), p_protocol: 7 }) }); }
     async sync(getState, replaceState) {
       if (!hasConfig || !this.signedIn() || this.running || !navigator.onLine) return false;
       this.running = true;
       try {
         if (this.needsRefresh() && !(await this.refresh())) throw new Error('登入已過期，請在設定重新登入');
-        const sent = [...this.record.pending]; const sentIds = new Set(sent.map(operation => operation.operationId));
-        let reply = await this.exchange(sent); let remote = reply?.operations || [];
-        // Always observe the full response before creating any follow-up local
-        // operation (including the first-device seed snapshot).
-        this.observeRemoteClock(remote);
-        this.rebaseRecentIntents(remote);
-        if (!remote.length) {
-          const current = syncable(getState());
-          const local = this.record.legacyPendingBackup?.length ? legacyApply(current, this.record.legacyPendingBackup) : current;
-          const seedState = mergeLegacy(reply?.data, local);
-          const seed = this.op('snapshot', [], seedState);
-          reply = await this.exchange([seed, ...sent], seedState); remote = reply?.operations || []; this.observeRemoteClock(remote); this.rebaseRecentIntents(remote); sentIds.add(seed.operationId);
-        }
-        const unsent = this.record.pending.filter(operation => !sentIds.has(operation.operationId));
-        const all = new Map([...this.record.known, ...remote, ...unsent].map(operation => [operation.operationId, operation]));
-        const result = this.materialize([...all.values()]); result.syncFormat = 5;
-        this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()];
-        this.record.pending = unsent;
-        const acknowledged = new Set(remote.map(operation => operation.operationId));
-        // Do not discard a just-acknowledged local intent immediately.  It is
-        // a short write fence against an out-of-order response; rebaseRecentIntents
-        // clears it after the protection window.
-        for (const [key, intent] of Object.entries(this.record.intents)) {
-          if (Date.now() > Number(intent.protectUntil || (Number(intent.createdAt || 0) + 12000))) delete this.record.intents[key];
-          else if (acknowledged.has(intent.operationId)) intent.acknowledgedAt = Date.now();
-        }
-        this.record.snapshot = result; this.record.legacyPendingBackup = null;
+        const sent = [...this.record.pending];
+        const sentIds = new Set(sent.map(operation => operation.operationId));
+        const seed = this.record.seed ? null : syncable(getState());
+        const reply = sent.length || seed ? await this.exchange(sent, seed) : await this.pull();
+        const remote = reply?.mutations || [];
+        if (reply?.seed && !this.record.seed) this.record.seed = syncable(reply.seed);
+        this.record.cursor = Math.max(Number(this.record.cursor || 0), Number(reply?.cursor || 0));
+        for (const operation of remote) { const key = operation.fieldKey || clockKey(operation.target, operation.path || []); this.record.revisions[key] = Number(operation.revision || this.record.revisions[key] || 0); }
+        this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()].sort(compareOperations);
+        this.record.pending = this.record.pending.filter(operation => !sentIds.has(operation.operationId));
+        const result = this.materialize(this.record.known); result.syncFormat = 7;
+        this.record.snapshot = result;
         // Persist acknowledgement state before handing a materialized state to
         // the UI adapter.  The adapter can therefore distinguish an
         // acknowledged merge from an old response racing a fresh local edit.
@@ -376,6 +305,7 @@
         if (waiting) { clearTimeout(this.timer); this.timer = setTimeout(() => Promise.resolve(this.onQueue()).catch(() => {}), 0); }
         return true;
       } catch (error) {
+        console.error('Camp sync v7 failed', error);
         if (/(401|jwt expired|expired|invalid jwt)/i.test(error.message) && await this.refresh()) { this.running = false; return this.sync(getState, replaceState); }
         this.onStatus(`等待同步：${error.message}`); return false;
       } finally { this.running = false; }
