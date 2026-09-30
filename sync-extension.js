@@ -21,6 +21,12 @@
   let appliedInitialRemoteState = false;
   let currentStatus = sync.signedIn() ? '正在確認同步狀態' : '離線：尚未登入同步帳號';
   const nativeSave = store.save.bind(store);
+  function invalidateDeferredRemote() {
+    // A deferred result was materialized before this local action.  It must
+    // never be allowed to repaint an older checkbox value over the new one.
+    pendingRemoteState = null;
+    if (remoteApplyTimer) { clearTimeout(remoteApplyTimer); remoteApplyTimer = null; }
+  }
   store.save = async function syncedSave() {
     // Every existing UI handler reaches this one transaction boundary.  A
     // serial queue avoids a rapid double click generating interleaved diffs.
@@ -31,6 +37,7 @@
         if (!applyingRemote) sync.queue(after);
       } finally { pendingCommitCount--; scheduleRemoteApply(); }
     };
+    if (!applyingRemote) invalidateDeferredRemote();
     pendingCommitCount++;
     committing = committing.then(commit, commit);
     return committing;
@@ -40,6 +47,7 @@
       try { await mutator(); const after = structuredClone(state); await nativeSave(); if (!applyingRemote) sync.queue(after); }
       finally { pendingCommitCount--; scheduleRemoteApply(); }
     };
+    if (!applyingRemote) invalidateDeferredRemote();
     pendingCommitCount++;
     committing = committing.then(run, run);
     return committing;
