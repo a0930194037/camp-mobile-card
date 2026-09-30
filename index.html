@@ -1,7 +1,222 @@
 <!doctype html>
-<html lang="zh-Hant"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#1f4937"><link rel="manifest" href="manifest.webmanifest"><title>露營助手</title>
-<style>
-:root{--ink:#18352a;--green:#2f624a;--green-deep:#1f4937;--sage:#dce7dc;--mist:#f3f6f1;--paper:#fffefa;--muted:#68746d;--line:#dbe1d9;--soft:#edf1eb}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.45 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;background:transparent;border:0}#app{min-height:100vh;padding-bottom:calc(66px + env(safe-area-inset-bottom))}.top{position:sticky;top:0;z-index:3;background:rgba(255,254,250,.97);border-bottom:1px solid var(--line);padding:15px 18px 12px}.brand{display:flex;align-items:center;justify-content:space-between;gap:10px}.brand h1{font-size:20px;letter-spacing:.06em;margin:0;color:var(--green-deep)}.brand-tools{display:flex;align-items:center;gap:12px}.brand-note,.header-settings{font-size:11px;letter-spacing:.13em;color:var(--green);font-weight:800;white-space:nowrap}.header-settings{padding:3px 0}.page{padding:22px 18px;max-width:620px;margin:auto}.eyebrow{font-size:11px;color:var(--green);letter-spacing:.12em;text-transform:uppercase;margin:0 0 5px;font-weight:700}.title{font-size:30px;margin:0 0 15px;letter-spacing:.01em;line-height:1.25}.sub,.meta,.tiny{color:var(--muted)}.sub{font-size:14px;margin:4px 0 14px}.tiny{font-size:12px}.primary,.secondary,.ghost{padding:10px 13px;border-radius:4px;font-weight:700;font-size:15px}.primary{background:var(--green-deep);color:#fff}.secondary{border:1px solid var(--green);color:var(--green-deep);background:transparent}.ghost{padding:7px 3px;color:var(--green);font-weight:700}.danger{color:#8a3530;border-color:#8a3530}.actions{display:flex;gap:9px;flex-wrap:wrap;margin:14px 0}.row{display:flex;align-items:center;gap:10px}.between{justify-content:space-between}.card{padding:15px 0;margin:10px 0;border-bottom:1px solid var(--line);background:transparent}.card.active{border-top:1px solid var(--line)}.card h3{font-size:18px;margin:0 0 3px}.progress{height:6px;background:var(--soft);margin:9px 0 5px}.progress span{display:block;height:100%;background:var(--green)}.list{border-top:1px solid var(--line)}.item{display:flex;gap:12px;padding:14px 0;border-bottom:1px solid var(--line);align-items:flex-start}.item input{width:22px;height:22px;margin-top:2px;accent-color:var(--green-deep);flex:none}.item.checked .item-name{text-decoration:line-through;color:var(--muted)}.item-name{font-weight:700;color:var(--ink)}.reason{font-size:12px;color:var(--muted);margin-top:2px;display:block}.section-head{display:flex;align-items:baseline;justify-content:space-between;margin:22px 0 3px}.section-head h2{font-size:18px;margin:0;color:var(--green-deep)}.section-head span{font-size:14px;color:var(--green);font-weight:700}.nav{position:fixed;bottom:0;left:0;right:0;background:rgba(255,254,250,.98);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4,1fr);z-index:5;padding-bottom:env(safe-area-inset-bottom)}.nav button{padding:14px 4px 12px;color:var(--muted);font-size:15px}.nav button.active{color:var(--green-deep);font-weight:800;box-shadow:inset 0 3px 0 var(--green)}.split{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--line)}.split button{padding:11px 4px;color:var(--muted)}.split button.active{color:var(--green-deep);box-shadow:inset 0 -3px 0 var(--green);font-weight:800}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{display:flex;flex-direction:column;gap:5px;margin:9px 0}.field label{font-size:13px;font-weight:700;color:var(--green-deep)}.field input,.field select,.field textarea{border:1px solid var(--line);border-radius:3px;padding:10px;background:var(--paper);width:100%;outline-color:var(--green)}.field textarea{min-height:82px;resize:vertical}.full{grid-column:1/-1}.checks{display:flex;flex-wrap:wrap;gap:6px}.check-label{border:1px solid var(--line);padding:6px 8px;font-size:13px;display:flex;gap:5px;align-items:center;border-radius:3px}.check-label:has(input:checked){border-color:var(--green);background:var(--mist)}.check-label input{width:auto}.dialog{position:fixed;inset:0;background:rgba(24,53,42,.30);z-index:9;padding:15px;display:flex;align-items:flex-end}.dialog-box{background:var(--paper);width:100%;max-width:620px;margin:auto;max-height:88vh;overflow:auto;padding:19px;border-top:3px solid var(--green-deep);border-radius:8px 8px 0 0}.dialog-box h2{font-size:22px;margin:0 0 8px;color:var(--green-deep)}.hidden{display:none!important}.empty{text-align:center;padding:48px 10px;color:var(--muted)}.art{font-size:42px;margin:5px 0 14px;display:block}.sync-light{width:11px;height:11px;border-radius:50%;background:#9aa39d;box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--line)}.sync-light.online{background:#2f8a62}.sync-light.syncing{background:#d69a32;animation:pulse 1.1s ease-in-out infinite}.sync-light.offline{background:#9aa39d}@keyframes pulse{50%{opacity:.35}}.sync-tip{position:fixed;z-index:20;right:10px;top:58px;max-width:220px;padding:7px 9px;border:1px solid var(--line);border-radius:4px;background:var(--paper);box-shadow:0 4px 14px #18352a22;font-size:12px}.gear-row{display:flex;align-items:center;border-bottom:1px solid var(--line)}.gear-row .open{flex:1;display:flex;gap:10px;padding:14px 0;text-align:left}.tag{border:1px solid var(--line);padding:3px 6px;font-size:12px;color:var(--green);border-radius:2px;white-space:nowrap}.remove{font-size:26px;line-height:1;padding:7px;color:var(--green)}.settings-section{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}@media(max-width:380px){.title{font-size:27px}.brand-note{font-size:9px}.brand-tools{gap:8px}.page{padding-left:14px;padding-right:14px}.form-grid{grid-template-columns:1fr}.full{grid-column:auto}}
-.hero{height:132px;display:flex;justify-content:flex-end;align-items:center;margin:-12px 0 4px}.hero img{width:184px;max-height:132px;object-fit:contain;filter:drop-shadow(0 5px 4px #18352a18)}.hero.compact{height:102px}.hero.compact img{width:145px;max-height:102px}@media(max-width:380px){.hero{height:108px}.hero img{width:150px;max-height:108px}}
-</style></head><body><main id="app" aria-live="polite"></main><script src="sync-config.js?v=13"></script><script src="sync-engine.js?v=13"></script><script src="app.js?v=13"></script><script>if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).catch(()=>{});</script></body></html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f4937" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>露營助手</title>
+  <link rel="stylesheet" href="planner.css" />
+  <style>
+    .menu-summary { display:flex; align-items:baseline; gap:12px; padding:10px 0 14px; border-bottom:1px solid var(--line); color:var(--green-deep); }
+    .menu-summary span { color:var(--muted); font-size:12px; white-space:nowrap; }
+    .menu-summary strong { font-size:14px; line-height:1.55; }
+    .progress-block { padding:14px 0; border-bottom:1px solid var(--line); }
+    .system-id { font-size:12px; color:var(--muted); margin:0 0 12px; }
+    .system-id strong { color:var(--green-deep); letter-spacing:.06em; }
+    .compact-options, .checks { display:flex; flex-wrap:wrap; gap:5px 13px; }
+    .compact-options label, .checks .check-label { border:0; background:transparent; padding:3px 0; white-space:nowrap; color:var(--ink); }
+    .compact-options label:has(input:checked), .checks .check-label:has(input:checked) { background:var(--sage); color:var(--green-deep); padding:3px 6px; }
+    .compact-options input, .checks input { accent-color:var(--green-deep); }
+    select[multiple] { width:100%; border:1px solid var(--line); background:var(--paper); padding:4px; }
+    select[multiple] option { padding:6px 8px; }
+    .location-row { display:flex; gap:8px; align-items:center; padding:5px 0; border-bottom:1px solid var(--line); }
+    .location-row input { flex:1; border:0; background:transparent; padding:7px 0; outline-color:var(--green); }
+    .recipe-picker { border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .recipe-picker summary { cursor:pointer; list-style:none; padding:10px 0; color:var(--green-deep); font-weight:700; display:flex; justify-content:space-between; }
+    .recipe-picker summary::-webkit-details-marker { display:none; }
+    .recipe-picker summary::after { content:'⌄'; margin-left:8px; }
+    .recipe-picker[open] summary::after { content:'⌃'; }
+    .recipe-picker summary span { color:var(--muted); font-size:11px; font-weight:500; margin-left:auto; }
+    .recipe-groups { max-height:310px; overflow:auto; padding:0 0 10px; }
+    .recipe-groups section { padding:7px 0 10px; border-top:1px solid var(--soft); }
+    .recipe-groups h3 { font-size:12px; color:var(--green); margin:0 0 4px; }
+    .recipe-groups label { display:block; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .recipe-groups input { accent-color:var(--green-deep); }
+    .field input[type="checkbox"] { width:auto; padding:0; border:0; background:transparent; }
+    .field .inline-label { align-self:flex-start; display:inline-flex; align-items:center; gap:7px; width:auto; padding:3px 0; border:0; background:transparent; color:var(--green-deep); }
+    .field .inline-label input[type="checkbox"] { width:16px; height:16px; margin:0; accent-color:var(--green-deep); }
+    .field .compact-options label, .field .checks .check-label { align-self:auto; width:auto; }
+    .field .compact-options { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:7px 18px; }
+    .field .compact-options label, .field .checks .check-label { display:flex !important; flex-direction:row !important; align-items:center !important; gap:7px; min-width:0; white-space:nowrap; }
+    .field .compact-options input[type="checkbox"], .field .checks input[type="checkbox"] { flex:0 0 16px; width:16px; height:16px; margin:0; }
+    .field .inline-label { flex-direction:row !important; justify-content:flex-start; }
+    .field .compact-options label:has(input:checked), .field .checks .check-label:has(input:checked) { background:transparent; padding:3px 0; color:var(--green-deep); }
+    .meal-tabs { display:flex; align-items:center; gap:3px; border-bottom:1px solid var(--line); }
+    .meal-tabs button { padding:8px 10px; color:var(--muted); font-weight:700; }
+    .meal-tabs button.active { color:var(--green-deep); box-shadow:inset 0 -2px 0 var(--green); }
+    .meal-tabs #recipe-count { margin-left:auto; color:var(--muted); font-size:11px; white-space:nowrap; }
+    .recipe-filter-note { margin:6px 0 2px; color:var(--muted); font-size:10px; }
+    .recipe-groups { max-height:300px; overflow:auto; padding:8px 0; }
+    .recipe-groups section { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; border:0; padding:0; }
+    .recipe-row { display:flex; align-items:center; min-width:0; padding:6px 0; }
+    .recipe-row label { display:flex; align-items:center; gap:7px; min-width:0; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .recipe-row label span { overflow:hidden; text-overflow:ellipsis; }
+    .favorite { width:28px; height:28px; padding:0; color:#9aa39d; font-size:20px; line-height:1; }
+    .favorite.is-favorite { color:#b77c26; }
+    .gear-row { display:flex; align-items:center; border-bottom:1px solid var(--line); }
+    .gear-open { display:flex; align-items:flex-start; gap:10px; flex:1; padding:13px 0; text-align:left; min-width:0; }
+    .shopping-recipe { margin:18px 0 24px; }
+    .shopping-recipe-title { display:flex; align-items:baseline; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); }
+    .shopping-recipe-title .recipe-slot { width:auto; min-width:76px; padding:3px 5px; color:var(--green); font-size:11px; font-weight:700; border:0; border-radius:0; background:transparent; }
+    .shopping-item { align-items:center; }
+    .shopping-remove { margin-left:auto; width:22px; height:22px; padding:0; border:0; border-radius:0; color:var(--green); background:transparent; font-size:18px; font-weight:400; line-height:22px; }
+    .shopping-remove:hover, .shopping-remove:focus-visible { color:var(--green-deep); background:transparent; outline:0; }
+    .add-extra-dish { margin:8px 0 0; color:var(--green); }
+    .packing-suggestions { margin:14px 0; padding:12px; border:1px solid var(--line); background:var(--mist); }
+    .packing-suggestions h3 { margin:0 0 4px; color:var(--green-deep); font-size:15px; }
+    .packing-suggestions p { margin:0 0 7px; color:var(--muted); font-size:12px; }
+    .suggestion-list > div { display:flex; align-items:center; gap:8px; padding:4px 0; }
+    .suggestion-list span { flex:1; font-size:13px; font-weight:700; }
+    .shopping-recipe-title strong { color:var(--green-deep); font-size:14px; }
+    .shopping-recipe-title em { margin-left:auto; color:var(--muted); font-size:11px; font-style:normal; }
+    .trip-context { margin:-3px 0 16px; color:var(--muted); font-size:12px; line-height:1.65; }
+    .trip-list-link { padding:2px 0; min-height:auto; color:var(--green); font-size:12px; white-space:nowrap; }
+    .environment-label-row { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+    .environment-label-row > label { margin:0; }
+    .environment-label-row .inline-label { display:flex!important; flex-direction:row!important; align-items:center!important; gap:7px; color:var(--ink); font-size:12px; font-weight:700; white-space:nowrap; }
+    .environment-label-row .inline-label input { flex:0 0 16px; width:16px; height:16px; margin:0; }
+    .dialog-topbar { position:sticky; top:-18px; z-index:2; display:flex; justify-content:flex-end; margin:-18px -18px 12px; padding:10px 18px 8px; background:var(--paper); border-bottom:1px solid var(--line); }
+    .dialog-footer { position:sticky; bottom:-18px; z-index:2; margin:18px -18px -18px; padding:10px 18px 14px; background:var(--paper); border-top:1px solid var(--line); }
+    .home-trip-row { display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--line); }
+    .home-progress-label { margin:8px 0 3px; color:var(--muted); font-size:11px; font-weight:700; }
+    .home-header-actions { display:flex; align-items:center; gap:8px; }
+    .home-page-heading { align-items:flex-start!important; flex-wrap:wrap!important; padding-right:166px!important; min-height:142px; }
+    .home-page-heading > :first-child { flex:0 0 100%!important; min-width:auto!important; }
+    .home-page-title { white-space:nowrap!important; word-break:keep-all!important; overflow-wrap:normal!important; }
+    .home-page-heading .home-header-actions { flex:1 1 auto; width:100%!important; margin-top:0!important; justify-content:flex-start; gap:8px; flex-wrap:nowrap!important; overflow:visible!important; }
+    .home-header-actions button { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:auto!important; min-width:max-content; white-space:nowrap!important; word-break:keep-all!important; overflow-wrap:normal!important; }
+    .home-header-actions .secondary, .home-header-actions .ghost { border:0; padding:8px 0; }
+    .home-header-actions .primary { margin-left:0; padding:9px 12px; }
+    .home-secondary-actions { display:flex; justify-content:center; align-items:center; gap:16px; padding:15px 0 5px; }
+    .home-secondary-actions button { white-space:nowrap; }
+    .location-search { display:flex; align-items:stretch; gap:7px; }
+    .location-search input { min-width:0; flex:1; }
+    .location-search .secondary { flex:0 0 auto; padding:7px 9px; white-space:nowrap; }
+    .map-actions { display:flex; align-items:center; gap:9px; margin-top:2px; }
+    .map-actions .ghost { padding:3px 0; white-space:nowrap; }
+    .map-actions .tiny { line-height:1.4; }
+    .amenities-options { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .trip-guidance { margin:0 0 16px; padding:9px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .trip-guidance h3 { color:var(--green-deep); font-size:12px; margin:0 0 6px; }
+    .trip-guidance p { color:var(--muted); font-size:11px; line-height:1.55; margin:4px 0; }
+    .record-section { margin:18px 0 26px; }
+    .record-section > h3 { color:var(--green-deep); font-size:13px; letter-spacing:.06em; margin:0; padding-bottom:7px; border-bottom:1px solid var(--line); }
+    .recipe-library { border-top:1px solid var(--line); padding-top:4px; }
+    .nav { grid-template-columns:repeat(4,1fr); }
+    .nav button.nav-back { color:var(--muted)!important; background:transparent!important; font-weight:400!important; box-shadow:none!important; }
+    .brand-tools { display:flex; align-items:center; gap:11px; }
+    .header-settings { color:var(--green); font-size:11px; font-weight:800; padding:3px 0; }
+    .page { position:relative; }
+    .page-heading { display:flex; align-items:center; justify-content:space-between; gap:14px; padding-right:202px; min-height:164px; }
+    .page-heading > :first-child { min-width:0; }
+    .page-heading .title { margin-bottom:0; }
+    .heading-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex:0 0 auto; }
+    .heading-actions button { white-space:nowrap; }
+    .page-decor { position:absolute; right:14px; top:10px; width:178px; height:150px; pointer-events:none; opacity:.98; background-image:url('assets/camping-illustrations-v1.png'); background-size:300% 200%; background-repeat:no-repeat; }
+    .decor-tent { background-image:url('assets/moonlight-tent-type3.png'); background-size:contain; background-position:center; }
+    .decor-fire { background-position:50% 0; }
+    .decor-forest { background-position:100% 0; }
+    .decor-backpack { background-image:url('assets/roll-table-low-chair.png'); background-size:contain; background-position:center; }
+    .decor-pot { background-image:url('assets/stove-solo-cookset.png'); background-size:contain; background-position:center; }
+    .decor-map { background-position:100% 100%; }
+    .page-decor + .row.between, .page-decor + .eyebrow { padding-right:196px; }
+    .page:has(.decor-map) > .title { padding-right:196px; min-height:92px; }
+    /* Active trips use the same intentional hero rhythm as Home, Gear and Recipes.
+       The code is metadata, not an action, so it never competes with the title. */
+    .active-trip-page .active-trip-hero { position:relative; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; min-height:172px; padding:22px 202px 14px 0; border-bottom:1px solid var(--line); }
+    .active-trip-primary { min-width:0; }
+    .active-trip-primary .eyebrow { margin:0 0 5px; }
+    .active-trip-primary .title { margin:0; white-space:normal; word-break:keep-all; overflow-wrap:anywhere; }
+    .active-trip-code { margin:6px 0 8px; color:var(--green); font-size:12px; font-weight:800; letter-spacing:.06em; }
+    .active-trip-primary .sub { margin:0; color:var(--muted); line-height:1.65; }
+    .trip-back-link { position:absolute; right:202px; bottom:15px; padding:3px 0; color:var(--green); font-size:12px; font-weight:800; white-space:nowrap; }
+    .active-trip-page .menu-summary { margin-top:8px; }
+    .active-trip-page .trip-main-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:18px; }
+    .active-trip-page .trip-main-actions button { white-space:nowrap; }
+    .active-trip-page .trip-secondary-actions { display:flex; flex-wrap:wrap; gap:14px; margin-top:11px; }
+    .active-trip-page .trip-secondary-actions .danger { color:#8a3530; }
+    /* The map occupies the upper-right hero space of an empty checklist. */
+    .no-trip-page .empty { padding:178px 12px 38px; }
+    .no-trip-page .empty .actions { justify-content:center; margin-top:20px; }
+    .settings-data { border-top:1px solid var(--line); margin-top:8px; padding-top:12px; }
+    .home-trip-row .card { flex:1; min-width:0; border-bottom:0; }
+    .home-trip-row > .danger, .item [data-action="remove-from-trip"] { flex:0 0 auto; width:22px; height:22px; padding:0; border:0; border-radius:0; background:transparent; color:var(--green); font-size:18px; font-weight:400; line-height:22px; text-align:center; }
+    .home-trip-row > .danger:hover, .home-trip-row > .danger:focus-visible { color:var(--green-deep); background:transparent; outline:0; }
+    .active-trip-page .trip-back-link { display:none; }
+    /* Keep the manual-add action available without taking over the list header
+       or competing with each row's remove (×) control. */
+    .list-add-gear { position:fixed; left:50%; bottom:54px; z-index:6; display:flex; align-items:center; justify-content:center; width:min(620px, calc(100vw - 36px)); height:36px; margin:0; padding:0 14px; border-radius:0; box-shadow:0 -2px 8px rgba(24,53,42,.14); font-size:12px; letter-spacing:.05em; transform:translateX(-50%); white-space:nowrap; }
+    .page:has(.list-add-gear) #list-body { padding-bottom:56px; }
+    .cancelled-trip { padding:14px 0; border-bottom:1px solid var(--line); }
+    .cancelled-trip h3 { margin:0 0 4px; font-size:15px; }
+    .gear-filter { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+    .gear-filter label { color:var(--green-deep); font-size:12px; font-weight:700; white-space:nowrap; }
+    .gear-filter select { flex:1; min-width:0; border:0; background:transparent; padding:5px 0; color:var(--ink); outline-color:var(--green); }
+    .recipe-groups section { display:block; }
+    .recipe-course { padding:9px 0 12px; border-bottom:1px solid var(--soft); }
+    .recipe-course:last-child { border-bottom:0; }
+    .recipe-course h3 { margin:0 0 5px; color:var(--green); font-size:12px; letter-spacing:.04em; }
+    .recipe-course.favorites h3 { color:#9a671e; }
+    .recipe-course-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; }
+    /* Keep the side panel wheel-scrollable without exposing clipped rails. */
+    html, body, #app, .dialog-box, .recipe-groups { scrollbar-width:none; -ms-overflow-style:none; }
+    html::-webkit-scrollbar, body::-webkit-scrollbar, #app::-webkit-scrollbar, .dialog-box::-webkit-scrollbar, .recipe-groups::-webkit-scrollbar { width:0; height:0; display:none; }
+    .dialog { overflow:hidden; }
+    .dialog-box { overflow-x:hidden!important; overflow-y:auto!important; }
+    .dialog-box form, .dialog-box .form-grid, .dialog-box .field, .dialog-box .recipe-picker { min-width:0; max-width:100%; }
+    .recipe-picker, .recipe-groups { overflow-x:hidden!important; }
+    .meal-tabs { flex-wrap:wrap; overflow:visible!important; gap:2px 4px; }
+    .meal-tabs button { flex:0 0 auto; min-width:2.7em; padding:7px 8px; }
+    .meal-tabs #recipe-count { position:static!important; margin-left:0; padding-left:4px; background:transparent; }
+    #toast { position:fixed; left:16px; right:16px; bottom:78px; z-index:20; padding:10px 12px; background:var(--green-deep); color:#fff; font-size:12px; line-height:1.45; opacity:0; transform:translateY(10px); pointer-events:none; transition:opacity .18s,transform .18s; }
+    #toast.show { opacity:1; transform:translateY(0); }
+    #toast[data-kind="error"] { background:#813d36; }
+    @media (max-width:360px) {
+      .form-grid { grid-template-columns:1fr; }
+      .page-heading { flex-wrap:wrap; padding-right:0; }
+      .page-heading > :first-child { padding-right:58px; }
+      .heading-actions { width:100%; justify-content:flex-start; }
+      .location-search { display:grid; grid-template-columns:minmax(0,1fr); }
+      .location-search .secondary { justify-self:start; }
+      .field .compact-options, .amenities-options { grid-template-columns:1fr; gap:6px; }
+      .recipe-course-grid { grid-template-columns:1fr; }
+      .meal-tabs button { padding:8px 7px; }
+      .meal-tabs { overflow:visible; }
+      .meal-tabs #recipe-count { position:sticky; right:0; padding-left:5px; background:var(--paper); }
+      .map-actions { align-items:flex-start; flex-direction:column; gap:2px; }
+      .page-heading { min-height:128px; }
+      .heading-actions { gap:6px; }
+      .heading-actions .primary,.heading-actions .secondary { padding:8px 9px; }
+      .page-decor { width:132px; height:112px; right:8px; top:8px; }
+      .page:has(.decor-map) > .title { padding-right:145px; min-height:76px; }
+      /* On the narrow side panel, Home uses the spare hero space for its tent
+         instead of shrinking it with the other utility-page decorations. */
+      .page:has(.home-page-heading) .page-decor { width:142px; height:122px; right:8px; top:10px; }
+      .active-trip-page .active-trip-hero { min-height:142px; padding:18px 145px 12px 0; }
+      .trip-back-link { right:145px; bottom:12px; }
+      .active-trip-primary .title { font-size:31px; }
+      .active-trip-primary .sub { font-size:12px; }
+      .active-trip-page .trip-main-actions { gap:6px; }
+      .active-trip-page .trip-main-actions .primary, .active-trip-page .trip-main-actions .secondary { padding:8px 9px; }
+      .no-trip-page .empty { padding-top:160px; }
+    }
+    @media (max-width:440px) {
+      .home-page-heading { align-items:flex-start!important; flex-wrap:wrap!important; padding-right:104px!important; min-height:136px; }
+      .home-page-heading > :first-child { flex-basis:100%!important; }
+      .home-page-heading .home-header-actions { width:100%!important; max-width:190px; justify-content:flex-start; flex-wrap:nowrap!important; gap:7px!important; }
+    }
+  </style>
+</head>
+<body>
+  <main id="app" aria-live="polite"></main>
+  <input id="file-input" type="file" accept=".xlsx,.csv,.json,image/png" hidden />
+  <script src="storage-bridge.js?v=14"></script>
+  <script src="planner.js?v=14"></script>
+  <script src="planner-enhancements.js?v=14"></script>
+  <script src="sync-config.js?v=14"></script>
+  <script src="sync-engine.js?v=14"></script>
+  <script src="sync-extension.js?v=14"></script>
+  <script>if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).catch(()=>{});</script>
+</body>
+</html>
