@@ -17,7 +17,7 @@
   const syncable = value => {
     if (value == null) return null;
     const document = clone(value);
-    ['page', 'pendingDeleteTripId', 'pendingPurgeId'].forEach(key => delete document[key]);
+    ['page', 'activeTripId', 'pendingDeleteTripId', 'pendingPurgeId'].forEach(key => delete document[key]);
     return document;
   };
 
@@ -86,13 +86,15 @@
       this.storage = storage;
       this.key = key;
       this.deviceId = id();
-      this.record = { session: null, baseline: null, pending: [], remoteVersion: 0 };
+      this.record = { session: null, baseline: null, pending: [], remoteVersion: 0, mergeVersion: 2 };
       this.onStatus = () => {};
       this.timer = null;
       this.running = false;
     }
     async load() {
-      this.record = { ...this.record, ...(await this.storage.get(this.key) || {}) };
+      const stored = await this.storage.get(this.key) || {};
+      this.record = { ...this.record, ...stored };
+      if (!Object.prototype.hasOwnProperty.call(stored, 'mergeVersion')) this.record.mergeVersion = 1;
       this.deviceId = this.record.deviceId || this.deviceId;
       this.record.deviceId = this.deviceId;
       await this.persist();
@@ -150,7 +152,10 @@
       const changes = diff(syncable(before), syncable(after));
       if (!changes.length) return;
       this.record.pending.push({ id: id(), deviceId: this.deviceId, at: new Date().toISOString(), changes });
-      this.record.baseline = syncable(after);
+      // The baseline is the last server-confirmed document.  Do not move it
+      // forward for an offline edit, or that edit appears unchanged when we
+      // later merge against the server's older document.
+      if (this.record.baseline == null) this.record.baseline = syncable(before);
       this.persist();
       this.onStatus('已離線儲存，等待同步');
       clearTimeout(this.timer); this.timer = setTimeout(() => this.sync().catch(() => {}), 450);
@@ -169,6 +174,13 @@
         let remote = await this.pull();
         if (remote?.data) remote = { ...remote, data: syncable(remote.data) };
         const localState = syncable(getState());
+        // Older app versions advanced baseline on every local save. Pending
+        // edits created by those versions would otherwise be mistaken for
+        // server data. Rebase that one queued batch onto the latest server
+        // document, while keeping the current local state as the pending edit.
+        if (remote && this.record.pending.length && this.record.mergeVersion !== 2) {
+          this.record.baseline = clone(remote.data);
+        }
         if (remote && this.record.baseline == null) {
           const merged = mergeDocuments(remote.data, localState, {});
           replaceState(clone(merged));
@@ -193,6 +205,7 @@
         } else if (remote && remote.version > (this.record.remoteVersion || 0)) {
           replaceState(clone(remote.data)); this.record.baseline = clone(remote.data); this.record.remoteVersion = remote.version;
         }
+        this.record.mergeVersion = 2;
         await this.persist(); this.onStatus('已同步'); return true;
       } catch (error) {
         if (/(401|jwt expired|expired|invalid jwt)/i.test(error.message) && await this.refresh()) { this.running = false; return this.sync(getState, replaceState); }
