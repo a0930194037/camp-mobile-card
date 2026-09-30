@@ -8,3 +8,6 @@
 .sync-settings { margin-top:15px!important; padding-top:13px; border-top:1px solid var(--line); }
 .sync-settings .actions { margin:6px 0 0; }
 @keyframes camp-sync-pulse { 50% { opacity:.35; } }
+
+/* Internal codes belong in create/edit forms, not in library rows. */
+.gear-row .tag { display:none; }

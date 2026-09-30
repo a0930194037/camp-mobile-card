@@ -183,6 +183,12 @@ function renderCancelledTrips() {
 }
 
 render = function () {
+  // Navigation is a transient UI choice.  Every fresh launch begins on trips,
+  // even if an earlier app version saved the old overview page.
+  if (!window.__campInitialViewSet) {
+    state.page = 'trips';
+    window.__campInitialViewSet = true;
+  }
   normalizeTripCodes();
   state.discardedTrips ??= [];
   // The checklist is a view of a trip.  If the previously selected trip is no
