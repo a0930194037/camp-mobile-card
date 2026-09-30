@@ -5,7 +5,9 @@ const originalRender = render;
 const originalAction = action;
 const originalDialog = dialog;
 const originalBuildTripItems = buildTripItems;
-let homeOpened = false;
+// Mobile opens directly on the 行程 tab; the overview remains available from
+// the card's「所有行程」action rather than replacing the first screen.
+let homeOpened = true;
 
 function dateCode(date) {
   return String(date || '').replace(/[^0-9]/g, '').slice(0, 8) || '00000000';
