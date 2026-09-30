@@ -41,6 +41,46 @@
     return changes;
   }
 
+  // Arrays in the planner are libraries, not positional lists.  Treating a
+  // newly added trip as a replacement for the whole array lets a stale device
+  // erase it.  Merge collections by stable ID before any queued write.
+  const collectionKeys = ['gear', 'recipes', 'trips', 'logs', 'discardedTrips'];
+  const recordId = (item, index) => String(item?.id ?? item?.code ?? `index:${index}`);
+  const changedFrom = (value, base) => !same(value, base);
+  function mergeCollection(remote = [], local = [], base = []) {
+    const remoteById = new Map(remote.map((item, index) => [recordId(item, index), item]));
+    const localById = new Map(local.map((item, index) => [recordId(item, index), item]));
+    const baseById = new Map(base.map((item, index) => [recordId(item, index), item]));
+    const ids = [...remoteById.keys(), ...localById.keys()];
+    return [...new Set(ids)].map(key => {
+      const remoteItem = remoteById.get(key), localItem = localById.get(key), baseItem = baseById.get(key);
+      if (!remoteItem) return localItem;
+      if (!localItem) return remoteItem;
+      // A first sync has no baseline. Keep the server's existing record on an
+      // ID collision, while still retaining any local-only newly created ID.
+      if (!baseItem) return remoteItem;
+      const localChanged = changedFrom(localItem, baseItem);
+      const remoteChanged = changedFrom(remoteItem, baseItem);
+      if (localChanged && !remoteChanged) return localItem;
+      if (!localChanged && remoteChanged) return remoteItem;
+      // If both changed the same record, prefer the later timestamp; a local
+      // pending edit wins ties because it is the edit being saved now.
+      const localTime = Date.parse(localItem.updatedAt || localItem.createdAt || 0) || 0;
+      const remoteTime = Date.parse(remoteItem.updatedAt || remoteItem.createdAt || 0) || 0;
+      return localTime >= remoteTime ? localItem : remoteItem;
+    });
+  }
+  function mergeDocuments(remote = {}, local = {}, base = {}) {
+    const merged = structuredClone(remote || {});
+    collectionKeys.forEach(key => { merged[key] = mergeCollection(remote?.[key], local?.[key], base?.[key]); });
+    merged.locations = [...new Set([...(remote?.locations || []), ...(local?.locations || [])])];
+    Object.keys(local || {}).filter(key => !collectionKeys.includes(key) && key !== 'locations').forEach(key => {
+      if (!changedFrom(local[key], base?.[key]) || changedFrom(remote?.[key], base?.[key])) return;
+      merged[key] = local[key];
+    });
+    return merged;
+  }
+
   class CampSync {
     constructor(storage, key = 'camp-sync.v1') {
       this.storage = storage;
@@ -130,8 +170,10 @@
         if (remote?.data) remote = { ...remote, data: syncable(remote.data) };
         const localState = syncable(getState());
         if (remote && this.record.baseline == null) {
-          replaceState(clone(remote.data));
+          const merged = mergeDocuments(remote.data, localState, {});
+          replaceState(clone(merged));
           this.record.baseline = clone(remote.data); this.record.remoteVersion = remote.version;
+          if (!same(merged, remote.data)) this.record.pending.push({ id: id(), deviceId: this.deviceId, at: new Date().toISOString(), changes: [{ path: [], value: merged }] });
         }
         if (!remote && this.record.baseline == null && localState) {
           this.record.baseline = {};
@@ -139,7 +181,11 @@
         }
         if (!remote && !localState) { this.onStatus('等待電腦端首次同步'); return false; }
         if (this.record.pending.length) {
-          const batch = this.record.pending.flatMap(entry => entry.changes);
+          // Reconcile against the latest server document before writing. This
+          // prevents a desktop's old queued array from replacing a trip just
+          // created on the phone (and works in the opposite direction too).
+          const merged = remote ? mergeDocuments(remote.data, localState, this.record.baseline) : localState;
+          const batch = [{ path: [], value: merged }];
           const updated = await this.request('/rest/v1/rpc/apply_camp_changes', { method: 'POST', body: JSON.stringify({ changes: batch }) });
           const row = Array.isArray(updated) ? updated[0] : updated;
           this.record.pending = [];
