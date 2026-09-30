@@ -17,6 +17,7 @@
   const nativeSave = store.save.bind(store);
   store.save = async function syncedSave() {
     const before = structuredClone(sync.record.baseline ?? state);
+    if (!applyingRemote) sync.stampChanges(before, state);
     await nativeSave();
     if (!applyingRemote) sync.queue(before, state);
   };

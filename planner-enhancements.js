@@ -132,7 +132,11 @@ function refineTripCardActions() {
 
 function discardTrip(current) {
   state.discardedTrips ??= [];
-  state.discardedTrips.unshift({ id: uid('discard'), trip: structuredClone(current), deletedAt: now() });
+  const changedAt = now();
+  const cancelled = { ...structuredClone(current), status: 'cancelled', statusUpdatedAt: changedAt, updatedAt: changedAt };
+  // Keep the original trip ID as the cancellation record ID. The sync layer
+  // can then compare active/cancelled/purged states for exactly one trip.
+  state.discardedTrips.unshift({ id: current.id, tripId: current.id, trip: cancelled, status: 'cancelled', statusUpdatedAt: changedAt, deletedAt: changedAt });
   state.discardedTrips = state.discardedTrips.slice(0, 10);
   state.trips = state.trips.filter(item => item.id !== current.id);
   state.activeTripId = null;
@@ -275,12 +279,18 @@ action = async function (name, data = {}) {
   if (name === 'restore-trip') {
     const entry = (state.discardedTrips || []).find(item => item.id === data.id);
     if (!entry) return;
-    state.trips.unshift(entry.trip);
+    const changedAt = now();
+    state.trips.unshift({ ...entry.trip, status: 'active', statusUpdatedAt: changedAt, updatedAt: changedAt });
     state.discardedTrips = state.discardedTrips.filter(item => item.id !== entry.id);
     state.pendingPurgeId = null; state.page = 'home'; await store.save(); return render();
   }
   if (name === 'purge-trip') {
     if (state.pendingPurgeId !== data.id) { state.pendingPurgeId = data.id; return render(); }
+    const entry = (state.discardedTrips || []).find(item => item.id === data.id);
+    const changedAt = now();
+    state.tripTombstones ??= [];
+    state.tripTombstones = state.tripTombstones.filter(item => (item.tripId || item.id) !== (entry?.tripId || entry?.trip?.id || data.id));
+    state.tripTombstones.push({ tripId: entry?.tripId || entry?.trip?.id || data.id, status: 'purged', statusUpdatedAt: changedAt, purgedAt: changedAt });
     state.discardedTrips = (state.discardedTrips || []).filter(item => item.id !== data.id);
     state.pendingPurgeId = null; await store.save(); return render();
   }

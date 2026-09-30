@@ -46,7 +46,7 @@
   // Arrays in the planner are libraries, not positional lists.  Treating a
   // newly added trip as a replacement for the whole array lets a stale device
   // erase it.  Merge collections by stable ID before any queued write.
-  const collectionKeys = ['gear', 'recipes', 'trips', 'logs', 'discardedTrips'];
+  const collectionKeys = ['gear', 'recipes', 'trips', 'logs', 'discardedTrips', 'tripTombstones'];
   const recordId = (item, index) => String(item?.id ?? item?.code ?? `index:${index}`);
   const changedFrom = (value, base) => !same(value, base);
   const shoppingId = (item, index) => String(item?.shoppingKey ?? item?.id ?? `${item?.recipeId || ''}:${item?.name || ''}:${index}`);
@@ -113,6 +113,46 @@
       if (!changedFrom(local[key], base?.[key]) || changedFrom(remote?.[key], base?.[key])) return;
       merged[key] = local[key];
     });
+    // A cancelled trip used to be removed from `trips` and placed in a
+    // separate collection. A stale device could therefore re-add the old
+    // active record. Reconcile both collections as one lifecycle per trip ID.
+    const choices = new Map();
+    const choose = candidate => {
+      if (!candidate.tripId) return;
+      const prior = choices.get(candidate.tripId);
+      const rank = { active: 1, cancelled: 2, purged: 3 };
+      if (!prior || candidate.at > prior.at || candidate.at === prior.at && rank[candidate.status] >= rank[prior.status]) choices.set(candidate.tripId, candidate);
+    };
+    [remote, local].forEach(source => {
+      (source?.trips || []).forEach(entry => choose({
+        tripId: entry.id, status: entry.status === 'cancelled' ? 'cancelled' : 'active', trip: entry,
+        // `updatedAt` is deliberately not used here: editing a stale trip is
+        // not an explicit restore. Lifecycle changes use statusUpdatedAt.
+        at: Date.parse(entry.statusUpdatedAt || entry.createdAt || 0) || 0
+      }));
+      (source?.discardedTrips || []).forEach(entry => choose({
+        tripId: entry.tripId || entry.trip?.id, status: 'cancelled', trip: entry.trip,
+        at: Date.parse(entry.statusUpdatedAt || entry.deletedAt || entry.trip?.statusUpdatedAt || 0) || 0
+      }));
+      (source?.tripTombstones || []).forEach(entry => choose({
+        tripId: entry.tripId || entry.id, status: 'purged',
+        at: Date.parse(entry.statusUpdatedAt || entry.purgedAt || 0) || 0
+      }));
+    });
+    merged.trips = [];
+    merged.discardedTrips = [];
+    merged.tripTombstones = [];
+    choices.forEach(choice => {
+      if (choice.status === 'purged') {
+        merged.tripTombstones.push({ tripId: choice.tripId, status: 'purged', statusUpdatedAt: new Date(choice.at).toISOString() });
+      } else if (choice.status === 'cancelled' && choice.trip) {
+        const cancelledAt = new Date(choice.at).toISOString();
+        const trip = { ...clone(choice.trip), status: 'cancelled', statusUpdatedAt: cancelledAt };
+        merged.discardedTrips.push({ id: choice.tripId, tripId: choice.tripId, trip, status: 'cancelled', statusUpdatedAt: cancelledAt, deletedAt: cancelledAt });
+      } else if (choice.trip) {
+        merged.trips.push({ ...clone(choice.trip), status: choice.trip.status === 'archived' ? 'archived' : 'active', statusUpdatedAt: new Date(choice.at).toISOString() });
+      }
+    });
     return merged;
   }
 
@@ -121,7 +161,7 @@
       this.storage = storage;
       this.key = key;
       this.deviceId = id();
-      this.record = { session: null, baseline: null, pending: [], remoteVersion: 0, mergeVersion: 2 };
+      this.record = { session: null, baseline: null, pending: [], remoteVersion: 0, mergeVersion: 2, lifecycleVersion: 2 };
       this.onStatus = () => {};
       this.onQueue = () => {};
       this.timer = null;
@@ -131,6 +171,7 @@
       const stored = await this.storage.get(this.key) || {};
       this.record = { ...this.record, ...stored };
       if (!Object.prototype.hasOwnProperty.call(stored, 'mergeVersion')) this.record.mergeVersion = 1;
+      if (!Object.prototype.hasOwnProperty.call(stored, 'lifecycleVersion')) this.record.lifecycleVersion = 1;
       this.deviceId = this.record.deviceId || this.deviceId;
       this.record.deviceId = this.deviceId;
       await this.persist();
@@ -184,6 +225,20 @@
       // normal edit never has to wait for an expired-token retry.
       return !!expiresAt && expiresAt <= Math.floor(Date.now() / 1000) + 60;
     }
+    stampChanges(before, after) {
+      // Most planner actions call the same save function. Stamp changed
+      // records here so additions, edits, favourites and logs all carry a
+      // comparable write time even when their individual UI handler did not
+      // need to know about synchronisation.
+      const changedAt = new Date().toISOString();
+      ['gear', 'recipes', 'trips', 'logs'].forEach(key => {
+        const prior = new Map((before?.[key] || []).map((entry, index) => [recordId(entry, index), entry]));
+        (after?.[key] || []).forEach((entry, index) => {
+          const earlier = prior.get(recordId(entry, index));
+          if (!same(entry, earlier) && (!entry.updatedAt || Date.parse(entry.updatedAt) <= (Date.parse(earlier?.updatedAt || 0) || 0))) entry.updatedAt = changedAt;
+        });
+      });
+    }
     queue(before, after) {
       const changes = diff(syncable(before), syncable(after));
       if (!changes.length) return;
@@ -228,6 +283,13 @@
           this.record.baseline = clone(remote.data); this.record.remoteVersion = remote.version;
           if (!same(merged, remote.data)) this.record.pending.push({ id: id(), deviceId: this.deviceId, at: new Date().toISOString(), changes: [{ path: [], value: merged }] });
         }
+        // One-time migration: turn legacy separate cancelled-trip records
+        // into lifecycle records before normal background reconciliation.
+        if (remote && this.record.lifecycleVersion !== 2) {
+          const migrated = mergeDocuments(remote.data, localState, this.record.baseline || {});
+          replaceState(clone(migrated));
+          if (!same(migrated, remote.data)) this.record.pending.push({ id: id(), deviceId: this.deviceId, at: new Date().toISOString(), changes: [{ path: [], value: migrated }] });
+        }
         if (!remote && this.record.baseline == null && localState) {
           this.record.baseline = {};
           this.record.pending.push({ id: id(), deviceId: this.deviceId, at: new Date().toISOString(), changes: [{ path: [], value: localState }] });
@@ -247,6 +309,7 @@
           replaceState(clone(remote.data)); this.record.baseline = clone(remote.data); this.record.remoteVersion = remote.version;
         }
         this.record.mergeVersion = 2;
+        this.record.lifecycleVersion = 2;
         await this.persist(); this.onStatus('已同步'); return true;
       } catch (error) {
         if (/(401|jwt expired|expired|invalid jwt)/i.test(error.message) && await this.refresh()) { this.running = false; return this.sync(getState, replaceState); }
