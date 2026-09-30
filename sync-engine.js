@@ -17,7 +17,9 @@
   const syncable = value => {
     if (value == null) return null;
     const document = clone(value);
-    ['page', 'activeTripId', 'pendingDeleteTripId', 'pendingPurgeId'].forEach(key => delete document[key]);
+    // Page is per-device navigation, while activeTripId is the shared current
+    // itinerary used by the checklist and must stay aligned across devices.
+    ['page', 'pendingDeleteTripId', 'pendingPurgeId'].forEach(key => delete document[key]);
     return document;
   };
 
@@ -47,10 +49,42 @@
   const collectionKeys = ['gear', 'recipes', 'trips', 'logs', 'discardedTrips'];
   const recordId = (item, index) => String(item?.id ?? item?.code ?? `index:${index}`);
   const changedFrom = (value, base) => !same(value, base);
-  function mergeCollection(remote = [], local = [], base = []) {
-    const remoteById = new Map(remote.map((item, index) => [recordId(item, index), item]));
-    const localById = new Map(local.map((item, index) => [recordId(item, index), item]));
-    const baseById = new Map(base.map((item, index) => [recordId(item, index), item]));
+  const shoppingId = (item, index) => String(item?.shoppingKey ?? item?.id ?? `${item?.recipeId || ''}:${item?.name || ''}:${index}`);
+  function mergeTrip(remote = {}, local = {}, base = {}) {
+    const merged = clone(remote);
+    const keys = new Set([...Object.keys(remote), ...Object.keys(local)]);
+    keys.forEach(key => {
+      const remoteValue = remote[key], localValue = local[key], baseValue = base?.[key];
+      const localChanged = changedFrom(localValue, baseValue);
+      const remoteChanged = changedFrom(remoteValue, baseValue);
+      if (!localChanged || remoteChanged && !localChanged) return;
+      if (!remoteChanged) { merged[key] = clone(localValue); return; }
+      // A checklist is not a single field: independently checked packing and
+      // shopping rows must survive concurrent edits on two devices.
+      if (key === 'items') {
+        merged.items = mergeCollection(remoteValue, localValue, baseValue, entry => String(entry?.gearId ?? entry?.id));
+        return;
+      }
+      if (key === 'shopping') {
+        merged.shopping = mergeCollection(remoteValue, localValue, baseValue, shoppingId);
+        return;
+      }
+      if (key === 'recipeIds') {
+        merged.recipeIds = [...new Set([...(remoteValue || []), ...(localValue || [])])];
+        return;
+      }
+      // Both devices changed the same non-checklist field. Keep the most
+      // recently edited trip; ties favour the device currently syncing.
+      const localTime = Date.parse(local.updatedAt || local.createdAt || 0) || 0;
+      const remoteTime = Date.parse(remote.updatedAt || remote.createdAt || 0) || 0;
+      if (localTime >= remoteTime) merged[key] = clone(localValue);
+    });
+    return merged;
+  }
+  function mergeCollection(remote = [], local = [], base = [], getId = recordId, collectionKey = '') {
+    const remoteById = new Map(remote.map((item, index) => [getId(item, index), item]));
+    const localById = new Map(local.map((item, index) => [getId(item, index), item]));
+    const baseById = new Map(base.map((item, index) => [getId(item, index), item]));
     const ids = [...remoteById.keys(), ...localById.keys()];
     return [...new Set(ids)].map(key => {
       const remoteItem = remoteById.get(key), localItem = localById.get(key), baseItem = baseById.get(key);
@@ -63,6 +97,7 @@
       const remoteChanged = changedFrom(remoteItem, baseItem);
       if (localChanged && !remoteChanged) return localItem;
       if (!localChanged && remoteChanged) return remoteItem;
+      if (collectionKey === 'trips') return mergeTrip(remoteItem, localItem, baseItem);
       // If both changed the same record, prefer the later timestamp; a local
       // pending edit wins ties because it is the edit being saved now.
       const localTime = Date.parse(localItem.updatedAt || localItem.createdAt || 0) || 0;
@@ -72,7 +107,7 @@
   }
   function mergeDocuments(remote = {}, local = {}, base = {}) {
     const merged = structuredClone(remote || {});
-    collectionKeys.forEach(key => { merged[key] = mergeCollection(remote?.[key], local?.[key], base?.[key]); });
+    collectionKeys.forEach(key => { merged[key] = mergeCollection(remote?.[key], local?.[key], base?.[key], recordId, key); });
     merged.locations = [...new Set([...(remote?.locations || []), ...(local?.locations || [])])];
     Object.keys(local || {}).filter(key => !collectionKeys.includes(key) && key !== 'locations').forEach(key => {
       if (!changedFrom(local[key], base?.[key]) || changedFrom(remote?.[key], base?.[key])) return;

@@ -61,7 +61,6 @@
       // a completed background sync never interrupts a checklist or editor.
       const view = {
         page: state.page,
-        activeTripId: state.activeTripId,
         pendingDeleteTripId: state.pendingDeleteTripId,
         pendingPurgeId: state.pendingPurgeId
       };
@@ -128,6 +127,6 @@
   placeSyncLight();
   if (sync.signedIn()) {
     await runSync();
-    setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 4000);
+    setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 2000);
   }
 })();
