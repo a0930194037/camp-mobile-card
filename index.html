@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f4937" />
+  <link rel="manifest" href="manifest.webmanifest" />
   <title>露營助手</title>
-  <link rel="stylesheet" href="sidepanel.css" />
+  <link rel="stylesheet" href="planner.css" />
   <style>
     .menu-summary { display:flex; align-items:baseline; gap:12px; padding:10px 0 14px; border-bottom:1px solid var(--line); color:var(--green-deep); }
     .menu-summary span { color:var(--muted); font-size:12px; white-space:nowrap; }
@@ -205,11 +207,17 @@
       .home-page-heading .home-header-actions { width:100%!important; max-width:190px; justify-content:flex-start; flex-wrap:nowrap!important; gap:7px!important; }
     }
   </style>
-  <meta name="theme-color" content="#1f4937">
-  <link rel="manifest" href="manifest.webmanifest">
 </head>
 <body>
   <main id="app" aria-live="polite"></main>
   <input id="file-input" type="file" accept=".xlsx,.csv,.json,image/png" hidden />
-<script src="legacy-ui.js"></script><script src="sync-config.js"></script><script src="sync-v8.js"></script><script src="boot.js"></script></body>
+  <script src="storage-bridge.js?v=56"></script>
+  <script src="planner.js?v=56"></script>
+  <script src="planner-enhancements.js?v=56"></script>
+  <script src="supabase-js.min.js?v=56"></script>
+  <script src="sync-config.js?v=56"></script>
+  <script src="sync-engine.js?v=56"></script>
+  <script src="sync-extension.js?v=56"></script>
+  <script>if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js?v=53',{updateViaCache:'none'}).catch(()=>{});</script>
+</body>
 </html>
