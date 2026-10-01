@@ -281,16 +281,31 @@
       this.running = true;
       try {
         if (this.needsRefresh() && !(await this.refresh())) throw new Error('登入已過期，請在設定重新登入');
-        const sent = [...this.record.pending];
-        const sentIds = new Set(sent.map(operation => operation.operationId));
+        let reply = { status: 'ok' };
+        let sawConflict = false;
+        const ingest = response => {
+          const remote = response?.mutations || [];
+          if (response?.seed && !this.record.seed) this.record.seed = syncable(response.seed);
+          this.record.cursor = Math.max(Number(this.record.cursor || 0), Number(response?.cursor || 0));
+          for (const operation of remote) { const key = operation.fieldKey || clockKey(operation.target, operation.path || []); this.record.revisions[key] = Number(operation.revision || this.record.revisions[key] || 0); }
+          this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()].sort(compareOperations);
+          return remote;
+        };
+        // Pull first, then submit each operation independently. A stale
+        // field can be rejected without blocking unrelated local changes.
         const seed = this.record.seed ? null : syncable(getState());
-        const reply = sent.length || seed ? await this.exchange(sent, seed) : await this.pull();
-        const remote = reply?.mutations || [];
-        if (reply?.seed && !this.record.seed) this.record.seed = syncable(reply.seed);
-        this.record.cursor = Math.max(Number(this.record.cursor || 0), Number(reply?.cursor || 0));
-        for (const operation of remote) { const key = operation.fieldKey || clockKey(operation.target, operation.path || []); this.record.revisions[key] = Number(operation.revision || this.record.revisions[key] || 0); }
-        this.record.known = [...new Map([...this.record.known, ...remote].map(operation => [operation.operationId, operation])).values()].sort(compareOperations);
-        this.record.pending = this.record.pending.filter(operation => !sentIds.has(operation.operationId));
+        ingest(seed ? await this.exchange([], seed) : await this.pull());
+        for (const queued of [...this.record.pending]) {
+          const operation = this.record.pending.find(item => item.operationId === queued.operationId);
+          if (!operation) continue;
+          if (this.record.known.some(item => item.operationId === operation.operationId)) { this.record.pending = this.record.pending.filter(item => item.operationId !== operation.operationId); continue; }
+          const revision = Number(this.record.revisions[operation.fieldKey] || 0);
+          if (revision !== Number(operation.baseRevision || 0)) { this.record.pending = this.record.pending.filter(item => item.operationId !== operation.operationId); sawConflict = true; continue; }
+          reply = await this.exchange([operation]);
+          ingest(reply);
+          this.record.pending = this.record.pending.filter(item => item.operationId !== operation.operationId);
+          sawConflict ||= reply?.status === 'conflict';
+        }
         const result = this.materialize(this.record.known); result.syncFormat = 7;
         this.record.snapshot = result;
         // Persist acknowledgement state before handing a materialized state to
