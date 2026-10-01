@@ -1,6 +1,6 @@
 {
-  "name": "露營助手・離線行程卡",
-  "short_name": "離線行程卡",
+  "name": "露營助手",
+  "short_name": "露營助手",
   "lang": "zh-Hant",
   "start_url": "./",
   "display": "standalone",
@@ -14,5 +14,5 @@
       "purpose": "any maskable"
     }
   ],
-  "description": "離線確認露營行程的打包與採買清單。"
+  "description": "跨裝置同步露營行程、裝備、料理與清單。"
 }
