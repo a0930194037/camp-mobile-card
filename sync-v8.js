@@ -41679,6 +41679,7 @@ ${suffix}`;
         }
         add3("relation", { id: oldId }, { id: stableId("recipe-link", parentId, recipeId), parentId, data: { recipeId, meal: item.recipeMeals?.[oldId] || "", snapshot } });
       }
+      const manualGearIds = new Set((overrides?.added || []).flatMap((row) => [row?.gearSyncId, row?.gearId]).filter(Boolean));
       for (const row of items) {
         const gearId = ref("gear", row.gearSyncId) || ref("gear", row.gearId);
         if (!gearId) {
@@ -41686,7 +41687,8 @@ ${suffix}`;
           continue;
         }
         const id2 = stableId("packing", parentId, gearId);
-        add3("packing", row, { id: id2, parentId, data: { ...row, gearId, snapshot: clone(row) }, lifecycle: (overrides?.removed || []).includes(row.gearId) ? "deleted" : "active" });
+        const manual = !!row.manual || manualGearIds.has(row.gearSyncId) || manualGearIds.has(row.gearId) || row.reason === "\u624B\u52D5\u52A0\u5165";
+        add3("packing", row, { id: id2, parentId, data: { ...row, gearId, snapshot: clone(row), manual }, lifecycle: (overrides?.removed || []).includes(row.gearId) ? "deleted" : "active" });
       }
       const keys = /* @__PURE__ */ new Set();
       for (const row of shopping || []) {
@@ -41761,7 +41763,8 @@ ${suffix}`;
         const row = values(child);
         if (child.kind === "packing") {
           const gear = catalogs.get(row.gearId), saved = row.snapshot || {};
-          const entry = { ...saved, ...row, gearId: gear?.id || saved.id || saved.gearId || row.gearId, gearSyncId: row.gearId, syncId: child.id };
+          const manual = !!row.manual || !!saved.manual || row.reason === "\u624B\u52D5\u52A0\u5165" || saved.reason === "\u624B\u52D5\u52A0\u5165";
+          const entry = { ...saved, ...row, manual, gearId: gear?.id || saved.id || saved.gearId || row.gearId, gearSyncId: row.gearId, syncId: child.id };
           if (child.lifecycle === "active") {
             t.items.push(entry);
             if (entry.manual) t.overrides.added.push(clone(entry));
