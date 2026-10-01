@@ -41751,12 +41751,13 @@ ${suffix}`;
     }
     for (const entity of byKind("trip")) {
       if (entity.lifecycle === "purged") continue;
-      const t = { goals: [], recipeIds: [], recipeMeals: {}, recipeSnapshots: {}, items: [], shopping: [], overrides: { added: [], removed: [] }, siteAmenities: [], ...display(entity) };
+      const t = { goals: [], recipeIds: [], recipeMeals: {}, recipeSnapshots: {}, recipeModified: {}, items: [], shopping: [], overrides: { added: [], removed: [] }, siteAmenities: [], ...display(entity) };
       t.items = [];
       t.shopping = [];
       t.recipeIds = [];
       t.recipeMeals = {};
       t.recipeSnapshots = {};
+      t.recipeModified = {};
       t.overrides = { added: [], removed: [] };
       for (const child of entities.values()) {
         if (child.parentId !== entity.id) continue;
@@ -41780,6 +41781,7 @@ ${suffix}`;
             t.recipeIds.push(recipe.id);
             t.recipeMeals[recipe.id] = row.meal;
             t.recipeSnapshots[recipe.id] = recipe;
+            t.recipeModified[recipe.id] = !!row.ingredientModified;
           }
         }
       }
@@ -41909,6 +41911,42 @@ ${suffix}`;
     const editFields = (tx, id, patch) => {
       for (const f2 of flatten(patch)) tx.set(id, f2.path, f2.value);
     };
+    const recipeRelation = (tx, tripId, recipeId) => [...tx.entities.values()].find((entity) => entity.parentId === tripId && entity.kind === "relation" && entity.lifecycle === "active" && values(entity).recipeId === recipeId);
+    const markRecipeIngredientsChanged = (tx, tripId, recipeId, changed = true) => {
+      const relation = recipeRelation(tx, tripId, recipeId);
+      if (relation) tx.set(relation.id, ["ingredientModified"], changed);
+    };
+    const setRelationSnapshot = (tx, relation, snapshot) => {
+      for (const field of flatten(snapshot, ["snapshot"])) tx.set(relation.id, field.path, field.value);
+    };
+    const currentIngredients = (tripData, recipe) => [...new Set((tripData.shopping || []).filter((row) => row.recipeId === recipe.id).map((row) => String(row.name || "").trim()).filter(Boolean))];
+    const saveModifiedRecipe = async (tripData, recipe, mode) => {
+      if (mode === "replace" && !confirm(`\u8981\u4EE5\u9019\u6B21\u884C\u7A0B\u8ABF\u6574\u904E\u7684\u98DF\u6750\u8986\u84CB\u300C${recipe.name}\u300D\u55CE\uFF1F\u9019\u6703\u5F71\u97FF\u4E4B\u5F8C\u4F7F\u7528\u9019\u9053\u6599\u7406\u7684\u884C\u7A0B\u3002`)) return;
+      const ingredients = currentIngredients(tripData, recipe);
+      if (!ingredients.length) throw new Error("\u81F3\u5C11\u8981\u4FDD\u7559\u4E00\u9805\u98DF\u6750\uFF0C\u624D\u80FD\u5132\u5B58\u6599\u7406\u3002");
+      return commands.run(mode === "replace" ? "replace-recipe" : "save-recipe-as", (tx) => {
+        const original = values(tx.entities.get(recipe.syncId));
+        const relation = recipeRelation(tx, tripData.syncId, recipe.syncId);
+        if (!relation) throw new Error("\u627E\u4E0D\u5230\u6B64\u884C\u7A0B\u7684\u6599\u7406\u95DC\u806F\u3002");
+        if (mode === "replace") {
+          const updated = { ...original, ingredients };
+          tx.set(recipe.syncId, ["ingredients"], ingredients);
+          setRelationSnapshot(tx, relation, updated);
+          tx.set(relation.id, ["ingredientModified"], false);
+          return;
+        }
+        const newRecipeId = newId(), newName = `${original.name}\uFF08\u8ABF\u6574\u7248\uFF09`, newDisplayId = `RCP-${newRecipeId.slice(0, 8)}`;
+        const saved = { ...original, id: newDisplayId, name: newName, ingredients };
+        tx.create("recipe", saved, { id: newRecipeId });
+        tx.set(relation.id, ["recipeId"], newRecipeId);
+        setRelationSnapshot(tx, relation, saved);
+        tx.set(relation.id, ["ingredientModified"], false);
+        for (const row of tx.entities.values()) if (row.parentId === tripData.syncId && row.kind === "shopping" && row.lifecycle === "active" && values(row).recipeId === recipe.syncId) {
+          tx.set(row.id, ["recipeId"], newRecipeId);
+          tx.set(row.id, ["recipeName"], newName);
+        }
+      });
+    };
     function recycle() {
       context3 = { name: "recycle", basis: basis() };
       const rows = [...lastEntities.values()].filter((e) => ["deleted", "cancelled"].includes(e.lifecycle));
@@ -41966,7 +42004,16 @@ ${suffix}`;
       }
       if (name === "remove-shopping") {
         const row = t.shopping.find((r) => r.shoppingKey === data.shoppingKey) || t.shopping[Number(data.index)];
-        return run(null, () => commands.lifecycle(row.syncId, "deleted"));
+        const recipe = find("recipes", row?.recipeId);
+        return commands.run("remove-shopping", (tx) => {
+          tx.lifecycle(row.syncId, "deleted");
+          if (recipe) markRecipeIngredientsChanged(tx, t.syncId, recipe.syncId);
+        });
+      }
+      if (name === "save-modified-recipe" || name === "replace-modified-recipe") {
+        const recipe = find("recipes", data.recipeId);
+        if (!recipe) throw new Error("\u627E\u4E0D\u5230\u8981\u5132\u5B58\u7684\u6599\u7406\u3002");
+        return saveModifiedRecipe(t, recipe, name === "replace-modified-recipe" ? "replace" : "save-as");
       }
       if (["delete-trip", "trash-trip"].includes(name)) {
         const e = name === "trash-trip" ? find("trips", data.id) : t;
@@ -42120,11 +42167,13 @@ ${suffix}`;
       }, { basis: ctx.basis });
       if (id === "archive-form") return commands.archive(ctx.tripId, { name: currentTrip().name, date: currentTrip().date, notes: text("notes"), unused: data.getAll("unused") });
       if (id === "trip-form") return saveTrip(data, ctx);
-      if (id === "extra-dish-form") return commands.run("extra-dish", (tx) => {
+      if (id === "extra-dish-form") return commands.run("add-recipe-ingredients", (tx) => {
         const recipe = find("recipes", ctx.id), ingredients = lines(text("ingredients"));
-        let recipeId = recipe?.syncId || null;
-        if (data.has("saveRecipe")) recipeId = tx.create("recipe", { id: "RCP-" + newId().slice(0, 8), name: text("name"), ingredients, gearRefs: [], type: "other", effort: "one-pot", meal: "\u4E0D\u9650", favorite: false });
-        for (const name of ingredients) tx.create("shopping", { name, recipeId, recipeName: text("name"), checked: false, manual: true }, { parentId: ctx.tripId });
+        if (!recipe) throw new Error("\u627E\u4E0D\u5230\u8981\u52A0\u83DC\u7684\u6599\u7406\u3002");
+        if (!ingredients.length) throw new Error("\u8ACB\u81F3\u5C11\u8F38\u5165\u4E00\u9805\u98DF\u6750\u3002");
+        const existing = new Set((currentTrip()?.shopping || []).filter((row) => row.recipeId === recipe.id).map((row) => row.name));
+        for (const name of ingredients) if (!existing.has(name)) tx.create("shopping", { name, recipeId: recipe.syncId, recipeName: recipe.name, checked: false, manual: true }, { parentId: ctx.tripId });
+        markRecipeIngredientsChanged(tx, ctx.tripId, recipe.syncId);
       });
       throw new Error(`\u5C1A\u672A\u63A5\u5165\u7684\u8868\u55AE ${id}\uFF0C\u5DF2\u4FDD\u7559\u756B\u9762\u4E14\u672A\u6539\u52D5\u8CC7\u6599\u3002`);
     }

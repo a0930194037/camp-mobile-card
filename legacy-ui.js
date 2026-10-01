@@ -1628,24 +1628,15 @@ function openExtraDishDialog(recipeId) {
   const currentTrip = trip();
   const parentRecipe = state.recipes.find(recipe => recipe.id === recipeId);
   if (!currentTrip || !parentRecipe) return;
-  const dialogRoot = dialog(`<h2>額外加菜</h2><form id="extra-dish-form"><div class="field"><label>菜名</label><input name="name" required placeholder="例如：烤玉米"></div><div class="field"><label>採買項目</label><textarea name="ingredients" required placeholder="一行一項，例如：&#10;玉米 2 根&#10;奶油 10g"></textarea></div><div class="field"><label class="inline-label"><input type="checkbox" name="saveRecipe"> 另存為料理</label></div><div class="actions"><button class="primary">加入</button><button type="button" class="secondary" id="cancel">取消</button></div></form>`);
+  const dialogRoot = dialog(`<h2>新增食材</h2><p class="sub">加入「${esc(parentRecipe.name)}」的本次行程食材。</p><form id="extra-dish-form"><div class="field"><label>食材／採買項目</label><textarea name="ingredients" required placeholder="一行一項，例如：&#10;玉米 2 根&#10;奶油 10g"></textarea></div><div class="actions"><button class="primary">加入食材</button><button type="button" class="secondary" id="cancel">取消</button></div></form>`);
   $('#cancel', dialogRoot).onclick = closeDialog;
   $('#extra-dish-form', dialogRoot).onsubmit = async event => {
     event.preventDefault();
     const data = new FormData(event.target);
-    const name = data.get('name').trim();
     const ingredients = data.get('ingredients').split(/\r?\n/).map(item => item.trim()).filter(Boolean);
-    if (data.get('saveRecipe') === 'on') {
-      const addedRecipe = { id: nextRecipeId(), name, type: 'other', effort: 'one-pot', meal: '不限', ingredients, gear: [], onsite: false, favorite: false };
-      state.recipes.push(addedRecipe);
-      currentTrip.recipeIds.push(addedRecipe.id);
-      currentTrip.recipeMeals ??= {};
-      currentTrip.recipeMeals[addedRecipe.id] = currentTrip.recipeMeals[recipeId] || '';
-    } else {
-      currentTrip.extraShopping ??= {};
-      currentTrip.extraShopping[recipeId] ??= [];
-      ingredients.forEach(itemName => currentTrip.extraShopping[recipeId].push({ id: uid('extra'), name: itemName, checked: false }));
-    }
+    currentTrip.extraShopping ??= {};
+    currentTrip.extraShopping[recipeId] ??= [];
+    ingredients.forEach(itemName => currentTrip.extraShopping[recipeId].push({ id: uid('extra'), name: itemName, checked: false }));
     recalc(currentTrip);
     await store.save();
     closeDialog();
@@ -1670,6 +1661,29 @@ action = async function shoppingAction(name, data = {}) {
     return;
   }
   return priorShoppingAction(name, data);
+};
+
+// A recipe's shopping rows are the editable, per-trip ingredient list. Once
+// any of those rows changes, offer an explicit choice to preserve that
+// variation as a new recipe or deliberately replace the original recipe.
+renderShop = function(items) {
+  const currentTrip = trip();
+  const groups = (items || []).reduce((all, item, index) => {
+    const id = item.recipeId || 'other';
+    (all[id] ??= { id, name: item.recipeName || '其他採買', meal: item.meal || '', items: [] }).items.push({ ...item, index });
+    return all;
+  }, {});
+  for (const recipeId of currentTrip?.recipeIds || []) {
+    if (groups[recipeId]) continue;
+    const recipe = state.recipes.find(entry => entry.id === recipeId) || currentTrip.recipeSnapshots?.[recipeId];
+    if (recipe) groups[recipeId] = { id: recipeId, name: recipe.name, meal: currentTrip.recipeMeals?.[recipeId] || '', items: [] };
+  }
+  if (!Object.keys(groups).length) return `<div class="section-head"><h2>採買清單</h2><span>0/0</span></div><p class="sub">尚未選擇料理。</p>`;
+  const slotOptions = ['', '早餐', '午餐', '晚餐', '宵夜'];
+  return `<div class="section-head"><h2>採買清單</h2><span>${done(items)}/${items.length}</span></div>${Object.values(groups).map(group => {
+    const modified = !!currentTrip?.recipeModified?.[group.id];
+    return `<section class="shopping-recipe"><div class="shopping-recipe-title"><select class="recipe-slot" data-recipe-slot="${esc(group.id)}" aria-label="${esc(group.name)}的用餐時段">${slotOptions.map(slot => `<option value="${slot}" ${group.meal === slot ? 'selected' : ''}>${slot || '未設定'}</option>`).join('')}</select><strong>${esc(group.name)}</strong><em>${done(group.items)}/${group.items.length}</em></div><div class="list">${group.items.map(item => `<div class="item shopping-item ${item.checked ? 'checked' : ''}"><input type="checkbox" data-shop="${item.index}" ${item.checked ? 'checked' : ''}><span class="item-name">${esc(item.name)}</span><button type="button" class="shopping-remove" data-action="remove-shopping" data-index="${item.index}" data-shopping-key="${esc(item.shoppingKey || `recipe:${item.recipeId}:${item.name}`)}" aria-label="移除 ${esc(item.name)}">×</button></div>`).join('')}</div><div class="actions"><button type="button" class="ghost add-extra-dish" data-action="add-extra-dish" data-recipe-id="${esc(group.id)}">額外加菜</button>${modified ? `<button type="button" class="ghost" data-action="save-modified-recipe" data-recipe-id="${esc(group.id)}">另存料理</button><button type="button" class="ghost" data-action="replace-modified-recipe" data-recipe-id="${esc(group.id)}">取代料理</button>` : ''}</div></section>`;
+  }).join('')}`;
 };
 
 const levelPresetFallbacks = {
