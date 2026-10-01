@@ -41565,6 +41565,12 @@ ${suffix}`;
   // sync-v8/migration.js
   var kinds = { gear: "gear", recipes: "recipe", trips: "trip", logs: "log" };
   var localOnly = /* @__PURE__ */ new Set(["page", "pendingDeleteTripId", "pendingPurgeId", "filter", "scrollTop"]);
+  var legacyTechnicalKeys = /* @__PURE__ */ new Set(["syncId", "gearSyncId", "snapshotName", "shoppingKey", "shoppingRowId"]);
+  function stripLegacyTechnical(value) {
+    if (Array.isArray(value)) return value.map(stripLegacyTechnical);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !legacyTechnicalKeys.has(key)).map(([key, item]) => [key, stripLegacyTechnical(item)]));
+  }
   async function backup(db, payload, id = newId()) {
     const raw = JSON.stringify(payload), checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw)))).map((x) => x.toString(16).padStart(2, "0")).join("");
     const existing = await db.backups.findOne(id).exec();
@@ -41628,7 +41634,7 @@ ${suffix}`;
       }
       seen.add(id);
       mapping.set(JSON.stringify([kind, item.syncId || item.id || item.tripId]), id);
-      records.push({ id, kind, parentId, lifecycle, fields: flatten(data).filter((f2) => f2.path.length) });
+      records.push({ id, kind, parentId, lifecycle, fields: flatten(stripLegacyTechnical(data)).filter((f2) => f2.path.length) });
       return id;
     }
     for (const [collection, kind] of Object.entries(kinds)) for (const item of state[collection] || []) {
@@ -41706,7 +41712,7 @@ ${suffix}`;
       if (id && !seen.has(id)) add3("trip", item, { id, lifecycle: "purged", data: {} });
     }
     for (const [key, value] of Object.entries(state)) {
-      if (key in kinds || ["discardedTrips", "tripTombstones", "recycleBin"].includes(key) || localOnly.has(key)) continue;
+      if (key in kinds || ["discardedTrips", "tripTombstones", "recycleBin", "syncFormat"].includes(key) || localOnly.has(key)) continue;
       if (key === "locations") {
         for (const name of new Set(value || [])) add3("location", { id: name }, { id: stableId("location", name), data: { name } });
       } else if (key === "levelDefaults") {
@@ -42198,6 +42204,15 @@ ${suffix}`;
   }
 
   // sync-v8/migration-coordinator.js
+  function canonical(value) {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+  }
+  function sameRecord(left, right) {
+    const normalize2 = (record) => canonical({ ...record, fields: [...record.fields || []].map((field) => canonical(field)).sort((a, b) => JSON.stringify(a.path).localeCompare(JSON.stringify(b.path))) });
+    return JSON.stringify(normalize2(left)) === JSON.stringify(normalize2(right));
+  }
   async function prepareMigration({ db, rpc, localState, legacyRecord = {}, prepared = null }) {
     const localBackup = await backup(db, { state: localState, legacy: dataOnlyLegacyRecord(legacyRecord) });
     prepared ??= await rpc("camp_v8_prepare", { p_backup_id: newId() });
@@ -42209,7 +42224,7 @@ ${suffix}`;
     for (const row of local.records) {
       const prior = records.get(row.id);
       if (!prior) records.set(row.id, row);
-      else if (JSON.stringify(prior) !== JSON.stringify(row)) recovery.push({ reason: "divergent-snapshots", id: row.id, server: prior, local: row });
+      else if (!sameRecord(prior, row)) recovery.push({ reason: "divergent-snapshots", id: row.id, server: prior, local: row });
     }
     const acknowledged = new Set((prepared.source.camp_sync_mutations || []).map((op) => op.operation_id));
     for (const op of legacyRecord.pending || []) if (!acknowledged.has(op.operationId)) recovery.push({ reason: "legacy-unacknowledged-operation", operation: op });
