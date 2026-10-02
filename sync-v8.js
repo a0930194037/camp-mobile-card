@@ -20557,6 +20557,7 @@ var CampV8 = (() => {
     }, retryTime = 1500 }) {
       Object.assign(this, { db, deviceId, transport, onStatus, onChange, retryTime });
       this.tail = Promise.resolve();
+      this.commandTail = Promise.resolve();
       this.closed = false;
       this.lastSuccess = 0;
       this.error = null;
@@ -20600,60 +20601,73 @@ var CampV8 = (() => {
           return { documents: reply.documents.map((e) => ({ id: e.id, payload: JSON.stringify(e), sequence: e.sequence, _deleted: false })), checkpoint: reply.checkpoint };
         } }
       });
-      this.commandReplication = replicateRxCollection({
-        collection: this.db.commands,
-        replicationIdentifier: "camp-v8-commands",
-        live: true,
-        retryTime: this.retryTime,
-        push: { batchSize: 50, handler: async (rows) => {
-          const pending = rows.map((r) => r.newDocumentState).filter((d) => d.status === "pending").sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
-          if (!pending.length) return [];
-          const raw = await this.db.authority.find().exec(), entities = new Map(raw.map((doc) => {
-            const entity = JSON.parse(doc.payload);
-            return [entity.id, entity];
-          }));
-          const outgoing = [];
-          for (const doc of pending) {
-            const command = normalizeCommandFieldPaths(JSON.parse(doc.request), entities), request = JSON.stringify(command);
-            if (request !== doc.request) {
-              const stored = await this.db.commands.findOne(doc.id).exec();
-              await stored?.incrementalPatch({ request });
-              doc.request = request;
-            }
-            outgoing.push({ doc, command });
-          }
-          const results = [];
-          for (const entry of outgoing) {
-            try {
-              const reply = await this.transport.push([entry.command]);
-              if (reply.length !== 1) throw new Error("server did not acknowledge operation");
-              results.push(reply[0]);
-            } catch (error) {
-              if (!String(error?.message || "").includes("overlapping_field_path")) throw error;
-              results.push({ id: entry.doc.id, status: "conflict", cursor: 0, reason: "overlapping_field_path" });
-            }
-          }
-          if (results.length !== pending.length) throw new Error("\u4F3A\u670D\u5668\u672A\u78BA\u8A8D\u6240\u6709\u64CD\u4F5C");
-          const conflicts = [];
-          for (const doc of pending) {
-            const receipt = results.find((r) => r.id === doc.id);
-            if (!receipt || !["accepted", "conflict"].includes(receipt.status)) throw new Error("\u76F8\u4F9D\u64CD\u4F5C\u5C1A\u672A\u78BA\u8A8D\uFF0C\u4FDD\u7559\u4F47\u5217\u7B49\u5F85\u91CD\u8A66");
-            conflicts.push({ ...doc, status: receipt.status, receipt: JSON.stringify(receipt) });
-          }
-          this.resync();
-          return conflicts;
-        } }
-      });
-      for (const replication of [this.authorityReplication, this.commandReplication])
+      for (const replication of [this.authorityReplication])
         this.subscriptions.push(replication.error$.subscribe((error) => {
           this.error = error.parameters?.errors?.[0]?.message || error.message || "\u540C\u6B65\u66AB\u6642\u5931\u6557";
           this.updateStatus();
         }));
-      for (const collection of [this.db.authority, this.db.commands])
-        this.subscriptions.push(collection.$.subscribe(() => this.refresh()));
+      this.subscriptions.push(this.db.authority.$.subscribe(() => this.refresh()));
+      this.subscriptions.push(this.db.commands.$.subscribe(() => {
+        this.refresh();
+        this.schedulePush();
+      }));
       this.subscriptions.push(this.db.metadata.$.subscribe(() => this.updateStatus()));
       await this.refresh();
+      this.schedulePush();
       return this;
+    }
+    schedulePush(delay = 0) {
+      if (this.closed) return;
+      clearTimeout(this.pushTimer);
+      this.pushTimer = setTimeout(() => {
+        const work = () => this.flushCommands();
+        this.commandTail = this.commandTail.then(work, work).catch((error) => {
+          this.error = error?.message || String(error);
+          this.updateStatus();
+          if (!this.closed) this.schedulePush(this.retryTime);
+        });
+      }, delay);
+    }
+    async flushCommands() {
+      if (this.closed) return;
+      const pending = (await this.db.commands.find().exec()).map((doc) => doc.toJSON()).filter((doc) => doc.status === "pending").sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+      if (!pending.length) return;
+      this.error = null;
+      for (const queued of pending) {
+        if (this.closed) return;
+        const raw = await this.db.authority.find().exec();
+        const entities = new Map(raw.map((doc) => {
+          const entity = JSON.parse(doc.payload);
+          return [entity.id, entity];
+        }));
+        const command = normalizeCommandFieldPaths(JSON.parse(queued.request), entities);
+        const request = JSON.stringify(command);
+        const row = await this.db.commands.findOne(queued.id).exec();
+        if (!row || row.status !== "pending") continue;
+        if (request !== row.request) await row.incrementalPatch({ request });
+        let receipt;
+        try {
+          const reply = await this.transport.push([command]);
+          if (reply.length !== 1 || reply[0]?.id !== queued.id) throw new Error("\u4F3A\u670D\u5668\u672A\u78BA\u8A8D\u64CD\u4F5C");
+          receipt = reply[0];
+        } catch (error) {
+          if (String(error?.message || "").includes("overlapping_field_path")) {
+            receipt = { id: queued.id, status: "conflict", reason: "overlapping_field_path" };
+          } else throw error;
+        }
+        if (receipt.status === "pending") {
+          continue;
+        }
+        if (!["accepted", "conflict"].includes(receipt.status)) throw new Error("\u4F3A\u670D\u5668\u56DE\u50B3\u672A\u77E5\u7684\u540C\u6B65\u7D50\u679C");
+        const current = await this.db.commands.findOne(queued.id).exec();
+        if (current?.status === "pending") await current.incrementalPatch({ status: receipt.status, receipt: JSON.stringify(receipt) });
+        if (receipt.status === "accepted") {
+          this.lastSuccess = Date.now();
+          await this.db.metadata.incrementalUpsert({ id: "sync-status", payload: JSON.stringify({ lastSuccess: this.lastSuccess, error: null }) });
+          this.resync();
+        }
+      }
+      await this.refresh();
     }
     async documents() {
       const [raw, cmds] = await Promise.all([this.db.authority.find().exec(), this.db.commands.find().exec()]);
@@ -20722,6 +20736,7 @@ var CampV8 = (() => {
         });
         this.onCommit?.(clone(mutation.command));
         await this.refresh();
+        this.schedulePush();
         return mutation.command.id;
       };
       const locked = () => globalThis.navigator?.locks ? navigator.locks.request("camp-commit-" + this.db.name, run) : run();
@@ -20731,13 +20746,18 @@ var CampV8 = (() => {
       return promise;
     }
     resync() {
-      if (!this.closed) this.stream.next("RESYNC");
+      if (!this.closed) {
+        this.stream.next("RESYNC");
+        this.schedulePush();
+      }
     }
     async close() {
       this.closed = true;
+      clearTimeout(this.pushTimer);
       await this.tail;
+      await this.commandTail;
       for (const sub of this.subscriptions) sub.unsubscribe();
-      await Promise.all([this.commandReplication?.cancel(), this.authorityReplication?.cancel()]);
+      await this.authorityReplication?.cancel();
       this.stream.complete();
       await this.db.close();
     }
