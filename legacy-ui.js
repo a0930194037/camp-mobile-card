@@ -1203,7 +1203,7 @@ function decorateTripDetails() {
         finish();
       };
       mapIllustration.onerror = finish;
-      mapIllustration.src = 'assets/camp-map-chibi.png?v=20261003-chibi';
+      mapIllustration.src = 'assets/camp-map-final.png';
     });
   };
 
