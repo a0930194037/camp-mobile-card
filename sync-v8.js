@@ -20440,6 +20440,46 @@ var CampV8 = (() => {
   }
 
   // sync-v8/replication.js
+  var pathStartsWith = (path, prefix) => prefix.length <= path.length && prefix.every((part, index) => path[index] === part);
+  var samePath = (left, right) => left.length === right.length && pathStartsWith(left, right);
+  function normalizeLegacySettingPaths(command, entities) {
+    const next = clone(command), rewritten = [];
+    for (const operation of next.operations) {
+      if (!["set", "deleteField"].includes(operation.type)) {
+        rewritten.push(operation);
+        continue;
+      }
+      const entity = entities.get(operation.entityId);
+      if (!entity || entity.kind !== "setting") {
+        rewritten.push(operation);
+        continue;
+      }
+      const fields = Object.values(entity.fields || {});
+      const ancestor = fields.filter((field) => field.path.length < operation.path.length && pathStartsWith(operation.path, field.path)).sort((left, right) => right.path.length - left.path.length)[0];
+      if (ancestor) {
+        const value = clone(ancestor.value || {}), suffix = operation.path.slice(ancestor.path.length);
+        setPath(value, suffix, operation.value, operation.type === "deleteField");
+        rewritten.push({ ...operation, type: "set", path: ancestor.path, value, baseRevision: ancestor.revision, afterCommandId: ancestor.commandId });
+        continue;
+      }
+      const descendants = fields.filter((field) => field.path.length > operation.path.length && pathStartsWith(field.path, operation.path));
+      if (descendants.length && operation.type === "set" && operation.value && typeof operation.value === "object" && !Array.isArray(operation.value)) {
+        for (const field of flatten(operation.value, operation.path)) {
+          const current = fields.find((candidate) => samePath(candidate.path, field.path));
+          rewritten.push({ ...operation, path: field.path, value: field.value, baseRevision: current?.revision || 0, afterCommandId: current?.commandId || null });
+        }
+        continue;
+      }
+      rewritten.push(operation);
+    }
+    const unique2 = /* @__PURE__ */ new Map();
+    for (const operation of rewritten) {
+      const key = operation.type === "set" || operation.type === "deleteField" ? `${operation.entityId}:${JSON.stringify(operation.path)}` : `${operation.type}:${operation.entityId}`;
+      unique2.set(key, operation);
+    }
+    next.operations = [...unique2.values()];
+    return next;
+  }
   var CampRepository = class {
     constructor({ db, deviceId, transport, onStatus = () => {
     }, onChange = () => {
@@ -20475,7 +20515,21 @@ var CampV8 = (() => {
         push: { batchSize: 50, handler: async (rows) => {
           const pending = rows.map((r) => r.newDocumentState).filter((d) => d.status === "pending").sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
           if (!pending.length) return [];
-          const results = await this.transport.push(pending.map((d) => JSON.parse(d.request)));
+          const raw = await this.db.authority.find().exec(), entities = new Map(raw.map((doc) => {
+            const entity = JSON.parse(doc.payload);
+            return [entity.id, entity];
+          }));
+          const outgoing = [];
+          for (const doc of pending) {
+            const command = normalizeLegacySettingPaths(JSON.parse(doc.request), entities), request = JSON.stringify(command);
+            if (request !== doc.request) {
+              const stored = await this.db.commands.findOne(doc.id).exec();
+              await stored?.incrementalPatch({ request });
+              doc.request = request;
+            }
+            outgoing.push(command);
+          }
+          const results = await this.transport.push(outgoing);
           if (results.length !== pending.length) throw new Error("\u4F3A\u670D\u5668\u672A\u78BA\u8A8D\u6240\u6709\u64CD\u4F5C");
           const conflicts = [];
           for (const doc of pending) {
