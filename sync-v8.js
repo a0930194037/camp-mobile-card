@@ -20450,7 +20450,7 @@ var CampV8 = (() => {
         continue;
       }
       const entity = entities.get(operation.entityId);
-      if (!entity || entity.kind !== "setting") {
+      if (!entity) {
         rewritten.push(operation);
         continue;
       }
@@ -20480,6 +20480,10 @@ var CampV8 = (() => {
     next.operations = [...unique2.values()];
     return next;
   }
+  var isLegacySettingsCommand = (command, entities) => command.operations.length > 0 && command.operations.every((operation) => {
+    if (operation.type === "create") return operation.kind === "setting";
+    return entities.get(operation.entityId)?.kind === "setting";
+  });
   var CampRepository = class {
     constructor({ db, deviceId, transport, onStatus = () => {
     }, onChange = () => {
@@ -20527,9 +20531,19 @@ var CampV8 = (() => {
               await stored?.incrementalPatch({ request });
               doc.request = request;
             }
-            outgoing.push(command);
+            outgoing.push({ doc, command });
           }
-          const results = await this.transport.push(outgoing);
+          const results = [];
+          for (const entry of outgoing) {
+            try {
+              const reply = await this.transport.push([entry.command]);
+              if (reply.length !== 1) throw new Error("server did not acknowledge operation");
+              results.push(reply[0]);
+            } catch (error) {
+              if (!String(error?.message || "").includes("overlapping_field_path") || !isLegacySettingsCommand(entry.command, entities)) throw error;
+              results.push({ id: entry.doc.id, status: "conflict", cursor: 0, reason: "overlapping_field_path" });
+            }
+          }
           if (results.length !== pending.length) throw new Error("\u4F3A\u670D\u5668\u672A\u78BA\u8A8D\u6240\u6709\u64CD\u4F5C");
           const conflicts = [];
           for (const doc of pending) {

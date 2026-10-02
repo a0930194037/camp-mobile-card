@@ -1,4 +1,4 @@
-const CACHE='camp-v8-5201c6b60d389990133067f01558e441dec955057ae63d4cd45f59a824ae79aa';const SHELL=["./","./index.html","./legacy-ui.js","./sync-config.js","./sync-v8.js","./boot.js","./sidepanel.css","./assets/camping-illustrations-v1.png","./assets/moonlight-tent-type3.png","./assets/roll-table-low-chair.png","./assets/stove-solo-cookset.png"];
+const CACHE='camp-v8-75a4fe0c227a984b4fac9447b6cb2830f17b559e6b8689ac4f2f4878f82611d0';const SHELL=["./","./index.html","./legacy-ui.js","./sync-config.js","./sync-v8.js","./boot.js","./sidepanel.css","./assets/camping-illustrations-v1.png","./assets/moonlight-tent-type3.png","./assets/roll-table-low-chair.png","./assets/stove-solo-cookset.png"];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('camp-v8-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',event=>{
