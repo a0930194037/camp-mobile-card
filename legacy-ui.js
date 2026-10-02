@@ -1708,13 +1708,14 @@ const waterRequirements = tripData => {
   const legacyRemoved = new Set(overrides.removed || []), legacyChecked = new Set(overrides.checked || []);
   const controls = new Map((tripData?.waterRows || []).filter(row => row.lifecycle === 'active').map(row => [row.waterKey, row]));
   const days = waterDays(tripData), rows = [{ key: 'drinking', name: '日常飲用水', ml: days * 2000, reason: `每人 ${days} 天飲用` }];
-  const seenRecipeWater = new Set();
-  for (const row of tripData?.shopping || []) {
+  for (const [index, row] of (tripData?.shopping || []).entries()) {
     const ml = waterAmount(row.name); if (!ml) continue;
-    const key = `recipe:${row.recipeId || ''}:${ml}`;
-    if (seenRecipeWater.has(key)) continue;
-    seenRecipeWater.add(key);
-    rows.push({ key, name: '料理飲用水', ml, reason: row.recipeName || '料理所需' });
+    // A recipe can contain two visually identical water ingredients (for
+    // example one original and one from 額外加菜). The shopping row UUID,
+    // not recipe ID + amount, is the stable identity for its checklist row.
+    const sourceId = row.syncId || row.shoppingRowId || row.shoppingKey || `legacy:${row.recipeId || ''}:${row.name || ''}:${index}`;
+    const legacyKey = `recipe:${row.recipeId || ''}:${ml}`;
+    rows.push({ key: `recipe-row:${sourceId}`, legacyKey, name: '料理飲用水', ml, reason: row.recipeName || '料理所需' });
   }
   if (tripData?.campType === 'wild') {
     rows.push({ key: 'wild-handwash', name: '洗手用水', ml: 1000, reason: '野營無固定洗手設施' });
@@ -1730,8 +1731,8 @@ const waterRequirements = tripData => {
     if (row.manual) rows.push({ key: row.waterKey, name: row.name || '自訂飲用水', ml: Number(row.ml) || 0, reason: row.reason || '手動新增' });
   }
   return rows.map(row => {
-    const control = controls.get(row.key);
-    return {...row, checked: control?.checked ?? legacyChecked.has(row.key), removed: !!control?.removed || legacyRemoved.has(row.key)};
+    const control = controls.get(row.key) || controls.get(row.legacyKey);
+    return {...row, checked: control?.checked ?? (legacyChecked.has(row.key) || legacyChecked.has(row.legacyKey)), removed: !!control?.removed || legacyRemoved.has(row.key) || legacyRemoved.has(row.legacyKey)};
   }).filter(row => row.ml > 0 && !row.removed);
 };
 const renderWaterPlan = tripData => {
