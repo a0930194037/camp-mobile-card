@@ -1923,7 +1923,7 @@ render = function renderWithMobileCardControls() {
     const tripData = state.trips.find(entry => entry.id === card.dataset.id), rows = shoppingProgressRows(tripData);
     const packingProgress = card.querySelector('.progress');
     if (!packingProgress) return;
-    packingProgress.insertAdjacentHTML('afterend', `<p class="home-progress-label home-shopping-progress">採買清單 · 已核銷 ${done(rows)} / ${rows.length}</p><div class="progress home-shopping-progress"><span style="width:${pct(rows)}%"></span></div>`);
+    packingProgress.insertAdjacentHTML('afterend', `<p class="home-progress-label home-shopping-progress">採買清單 · 已採買 ${done(rows)} / ${rows.length}</p><div class="progress home-shopping-progress"><span style="width:${pct(rows)}%"></span></div>`);
   });
 };
 

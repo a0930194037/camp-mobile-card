@@ -6562,7 +6562,9 @@ var CampV8 = (() => {
       if (ancestor) {
         const merged = isPlainObject(ancestor.value) ? clone(ancestor.value) : /* @__PURE__ */ Object.create(null);
         setPath(merged, path.slice(ancestor.path.length), value, deleted);
-        return this.set(id, ancestor.path, merged);
+        delete e.fields[fieldKey(ancestor.path)];
+        for (const entry of flatten(merged, ancestor.path)) this.set(id, entry.path, entry.value);
+        return;
       }
       const descendants = fields.filter((candidate) => candidate.path.length > path.length && startsWithPath(candidate.path, path));
       if (descendants.length) {
@@ -20482,6 +20484,28 @@ var CampV8 = (() => {
       rewritten.push(operation);
       remember(operation);
     };
+    const isObject4 = (value) => value && typeof value === "object" && !Array.isArray(value);
+    const canonicalLeaves = (operation, fields, value, path = operation.path) => {
+      const parents = fields.filter((field) => field.path.length <= path.length && pathStartsWith(path, field.path) && isObject4(field.value));
+      for (const parent of parents) {
+        const index = fields.indexOf(parent);
+        if (index >= 0) fields.splice(index, 1);
+      }
+      const leaves = flatten(value, path);
+      if (leaves.length === 1 && samePath(leaves[0].path, path) && isObject4(leaves[0].value) && Object.keys(leaves[0].value).length === 0) return;
+      for (const leaf of leaves) {
+        const current = fields.find((candidate) => samePath(candidate.path, leaf.path));
+        const inherited = parents.filter((parent) => pathStartsWith(leaf.path, parent.path)).sort((a, b) => b.path.length - a.path.length)[0];
+        append({
+          ...operation,
+          type: "set",
+          path: leaf.path,
+          value: leaf.value,
+          baseRevision: current?.revision ?? inherited?.revision ?? operation.baseRevision ?? 0,
+          afterCommandId: current?.commandId ?? inherited?.commandId ?? operation.afterCommandId ?? null
+        });
+      }
+    };
     for (const operation of next.operations) {
       if (operation.type === "create") {
         layouts.set(operation.entityId, []);
@@ -20493,25 +20517,20 @@ var CampV8 = (() => {
         continue;
       }
       const fields = layouts.get(operation.entityId) || [];
-      const ancestor = fields.filter((field) => field.path.length < operation.path.length && pathStartsWith(operation.path, field.path)).sort((left, right) => right.path.length - left.path.length)[0];
+      if (operation.type === "set" && isObject4(operation.value)) {
+        canonicalLeaves(operation, fields, operation.value);
+        continue;
+      }
+      const ancestor = fields.filter((field) => field.path.length < operation.path.length && pathStartsWith(operation.path, field.path) && isObject4(field.value)).sort((left, right) => right.path.length - left.path.length)[0];
       if (ancestor) {
-        const value = clone(ancestor.value || {}), suffix = operation.path.slice(ancestor.path.length);
+        const value = clone(ancestor.value), suffix = operation.path.slice(ancestor.path.length);
         setPath(value, suffix, operation.value, operation.type === "deleteField");
-        append({ ...operation, type: "set", path: ancestor.path, value, baseRevision: ancestor.revision, afterCommandId: ancestor.commandId });
+        canonicalLeaves(operation, fields, value, ancestor.path);
         continue;
       }
       const descendants = fields.filter((field) => field.path.length > operation.path.length && pathStartsWith(field.path, operation.path));
-      if (descendants.length && (operation.type === "deleteField" || operation.value && typeof operation.value === "object" && !Array.isArray(operation.value))) {
-        if (operation.type === "deleteField" || Object.keys(operation.value).length === 0) {
-          for (const descendant of descendants) append({ ...operation, type: "deleteField", path: descendant.path, value: null, baseRevision: descendant.revision, afterCommandId: descendant.commandId });
-          continue;
-        }
-        const leaves = new Map(flatten(operation.value, operation.path).map((field) => [JSON.stringify(field.path), field]));
-        for (const descendant of descendants) if (!leaves.has(JSON.stringify(descendant.path))) append({ ...operation, type: "deleteField", path: descendant.path, value: null, baseRevision: descendant.revision, afterCommandId: descendant.commandId });
-        for (const field of flatten(operation.value, operation.path)) {
-          const current = fields.find((candidate) => samePath(candidate.path, field.path));
-          append({ ...operation, path: field.path, value: field.value, baseRevision: current?.revision || 0, afterCommandId: current?.commandId || null });
-        }
+      if (descendants.length && operation.type === "deleteField") {
+        for (const descendant of descendants) append({ ...operation, path: descendant.path, value: null, baseRevision: descendant.revision, afterCommandId: descendant.commandId });
         continue;
       }
       append(operation);
@@ -20537,7 +20556,29 @@ var CampV8 = (() => {
       this.subscriptions = [];
       this.refreshVersion = 0;
     }
+    async repairPathLayoutConflicts() {
+      const [rows, raw] = await Promise.all([this.db.commands.find().exec(), this.db.authority.find().exec()]);
+      const entities = new Map(raw.map((doc) => {
+        const entity = JSON.parse(doc.payload);
+        return [entity.id, entity];
+      }));
+      for (const row of rows) {
+        if (row.status !== "conflict") continue;
+        let receipt, command;
+        try {
+          receipt = JSON.parse(row.receipt);
+          command = JSON.parse(row.request);
+        } catch {
+          continue;
+        }
+        if (receipt.reason !== "overlapping_field_path") continue;
+        const repaired = normalizeCommandFieldPaths(command, entities), request = JSON.stringify(repaired);
+        if (request === row.request) continue;
+        await row.incrementalPatch({ request, status: "pending", receipt: "{}" });
+      }
+    }
     async start() {
+      await this.repairPathLayoutConflicts();
       this.authorityReplication = replicateRxCollection({
         collection: this.db.authority,
         replicationIdentifier: "camp-v8-authority",
@@ -41995,7 +42036,7 @@ ${suffix}`;
     const currentTrip = () => legacy.state.trips.find((t) => t.id === legacy.state.activeTripId);
     const openWaterDialog = (tripData) => {
       context3 = { name: "water", tripId: tripData.syncId, basis: basis() };
-      legacy.dialog(`<form id="water-form"><h2>\u65B0\u589E\u7528\u6C34</h2><div class="field"><label>\u7528\u9014</label><input name="name" required value="\u98F2\u7528\u6C34" placeholder="\u4F8B\u5982\uFF1A\u6CE1\u8336\u5099\u7528"></div><div class="field"><label>\u6C34\u91CF\uFF08ml\uFF09</label><input name="ml" type="number" min="1" step="50" required value="500"></div><div class="actions"><button class="primary">\u52A0\u5165</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
+      legacy.dialog(`<form id="water-form"><h2>\u65B0\u589E\u7528\u6C34</h2><div class="field"><label>\u7528\u9014</label><input name="name" required value="\u98F2\u7528\u6C34" placeholder="\u4F8B\u5982\uFF1A\u6CE1\u8336\u5099\u7528"></div><div class="field"><label>\u6C34\u91CF\uFF08ml\uFF09</label><input name="ml" type="number" required value="500"></div><div class="actions"><button class="primary">\u52A0\u5165</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
     };
     const find = (collection, id) => legacy.state[collection].find((e) => e.id === id || e.syncId === id);
     const basis = () => new Map([...displayedEntities].map(([id, e]) => [id, clone(e)]));
@@ -42299,7 +42340,8 @@ ${suffix}`;
       if (id === "manual-add-form") return commands.addPacking(ctx.tripId, [...form.querySelectorAll("input:checked")].map((e) => find("gear", e.value).syncId));
       if (id === "water-form") return commands.run("add-water", (tx) => {
         const tripEntity = tx.entities.get(ctx.tripId), existing = values(tripEntity).waterOverrides || {};
-        const name = normalizeDrinkingWater(text("name")) || "\u98F2\u7528\u6C34", ml = Math.max(1, Math.round(Number(text("ml")) || 0));
+        const name = normalizeDrinkingWater(text("name")) || "\u98F2\u7528\u6C34", ml = Number(text("ml"));
+        if (!Number.isFinite(ml) || ml <= 0) throw new Error("\u8ACB\u8F38\u5165\u5927\u65BC 0 \u7684\u6C34\u91CF");
         tx.set(ctx.tripId, ["waterOverrides"], { ...existing, added: [...existing.added || [], { id: newId(), name, ml }] });
       });
       if (id === "gear-form" || id === "recipe-form") {
