@@ -20722,7 +20722,7 @@ var CampV8 = (() => {
         if (this.closed) throw new Error("\u5E33\u865F\u5DF2\u5207\u63DB\uFF0C\u672A\u63D0\u4EA4\u64CD\u4F5C");
         const { entities, commands } = await this.documents();
         const pending = new Set(commands.filter((d) => d.status === "pending" || d.status === "accepted").map((d) => d.id));
-        const mutation = new Mutation(name, this.deviceId, basis || entities, pending);
+        const mutation = new Mutation(name, this.deviceId, entities, pending);
         const result = build(mutation);
         if (result && typeof result.then === "function") throw new Error("\u8ACB\u5728\u4EA4\u6613\u5916\u5B8C\u6210\u975E\u540C\u6B65\u5DE5\u4F5C");
         if (!mutation.command.operations.length) return null;
@@ -42487,10 +42487,13 @@ ${suffix}`;
         for (const recipe of selected) {
           const id = stableId("recipe-link", tripId, recipe.syncId);
           if (tx.entities.has(id)) {
-            if (tx.entities.get(id).lifecycle !== "active") throw new Error("\u6599\u7406\u66FE\u5F9E\u6B64\u884C\u7A0B\u79FB\u9664\uFF0C\u8ACB\u5F9E\u56DE\u6536\u5340\u660E\u78BA\u5FA9\u539F\u3002");
-            continue;
-          }
-          tx.create("relation", { recipeId: recipe.syncId, snapshot: clone(recipe), meal: "" }, { id, parentId: tripId });
+            const relation = tx.entities.get(id);
+            if (relation.lifecycle === "active") continue;
+            tx.lifecycle(id, "active");
+            tx.set(id, ["recipeId"], recipe.syncId);
+            setRelationSnapshot(tx, relation, clone(recipe));
+            tx.set(id, ["meal"], "");
+          } else tx.create("relation", { recipeId: recipe.syncId, snapshot: clone(recipe), meal: "" }, { id, parentId: tripId });
           for (const name of recipe.ingredients || []) tx.create("shopping", { name, recipeId: recipe.syncId, recipeName: recipe.name, checked: false }, { parentId: tripId });
         }
         for (const e of tx.entities.values()) if (e.parentId === tripId && e.lifecycle === "active" && e.kind === "relation" && !selected.some((r) => r.syncId === values(e).recipeId)) {
