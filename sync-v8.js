@@ -20764,6 +20764,7 @@ var CampV8 = (() => {
   };
 
   // sync-v8/commands.js
+  var isPlainObject2 = (value) => value && typeof value === "object" && !Array.isArray(value);
   var CampCommands = class {
     constructor(repository) {
       this.repository = repository;
@@ -20792,8 +20793,14 @@ var CampV8 = (() => {
       return this.run("setting", (tx) => {
         const id = stableId("setting", key);
         if (!tx.entities.has(id)) tx.create("setting", { key, value }, { id });
-        else tx.set(id, ["value"], { ...values(tx.entities.get(id)).value || {}, ...value });
+        else {
+          const current = values(tx.entities.get(id)).value;
+          tx.set(id, ["value"], isPlainObject2(current) && isPlainObject2(value) ? { ...current, ...value } : value);
+        }
       });
+    }
+    createTrip(data, { id } = {}) {
+      return this.run("create-trip", (tx) => tx.create("trip", data, { id }));
     }
     addPacking(tripId, gearIds) {
       return this.run("add-packing", (tx) => {
@@ -29880,7 +29887,7 @@ Suggested solution: ${env.workaround}`;
     if (customFetch) return (...args) => customFetch(...args);
     return (...args) => fetch(...args);
   };
-  var isPlainObject2 = (value) => {
+  var isPlainObject3 = (value) => {
     if (typeof value !== "object" || value === null) return false;
     const prototype = Object.getPrototypeOf(value);
     return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(Symbol.toStringTag in value) && !(Symbol.iterator in value);
@@ -29937,7 +29944,7 @@ Suggested solution: ${env.workaround}`;
       headers: (options === null || options === void 0 ? void 0 : options.headers) || {}
     };
     if (method === "GET" || method === "HEAD" || !body) return _objectSpread22(_objectSpread22({}, params), parameters);
-    if (isPlainObject2(body)) {
+    if (isPlainObject3(body)) {
       var _contentType;
       const headers = (options === null || options === void 0 ? void 0 : options.headers) || {};
       let contentType;
@@ -42180,7 +42187,12 @@ ${suffix}`;
     const setSetting = (tx, key, value) => {
       const id = stableId("setting", key);
       if (!tx.entities.has(id)) tx.create("setting", { key, value }, { id });
-      else tx.set(id, ["value"], { ...values(tx.entities.get(id)).value || {}, ...value });
+      else {
+        const current = values(tx.entities.get(id)).value;
+        const structured = value && typeof value === "object" && !Array.isArray(value);
+        const previous = current && typeof current === "object" && !Array.isArray(current);
+        tx.set(id, ["value"], structured && previous ? { ...current, ...value } : value);
+      }
     };
     const editFields = (tx, id, patch) => {
       for (const f2 of flatten(patch)) tx.set(id, f2.path, f2.value);
@@ -42527,40 +42539,47 @@ ${suffix}`;
       });
       throw new Error(`\u5C1A\u672A\u63A5\u5165\u7684\u8868\u55AE ${id}\uFF0C\u5DF2\u4FDD\u7559\u756B\u9762\u4E14\u672A\u6539\u52D5\u8CC7\u6599\u3002`);
     }
+    function reconcileTripPlan(tx, tripId, selected, suggestions) {
+      for (const row of suggestions) {
+        const gear = find("gear", row.gearId);
+        if (!gear) continue;
+        const id = stableId("packing", tripId, gear.syncId);
+        if (!tx.entities.has(id)) tx.create("packing", { ...row, gearId: gear.syncId, snapshot: clone(gear), checked: false, manual: false }, { id, parentId: tripId });
+      }
+      for (const recipe of selected) {
+        const id = stableId("recipe-link", tripId, recipe.syncId);
+        if (tx.entities.has(id)) {
+          const relation = tx.entities.get(id);
+          if (relation.lifecycle === "active") continue;
+          tx.lifecycle(id, "active");
+          tx.set(id, ["recipeId"], recipe.syncId);
+          setRelationSnapshot(tx, relation, clone(recipe));
+          tx.set(id, ["meal"], "");
+        } else tx.create("relation", { recipeId: recipe.syncId, snapshot: clone(recipe), meal: "" }, { id, parentId: tripId });
+        for (const name of recipe.ingredients || []) tx.create("shopping", { name, recipeId: recipe.syncId, recipeName: recipe.name, checked: false }, { parentId: tripId });
+      }
+      for (const e of tx.entities.values()) if (e.parentId === tripId && e.lifecycle === "active" && e.kind === "relation" && !selected.some((r) => r.syncId === values(e).recipeId)) {
+        tx.lifecycle(e.id, "deleted");
+        for (const row of tx.entities.values()) if (row.parentId === tripId && row.kind === "shopping" && row.lifecycle === "active" && values(row).recipeId === values(e).recipeId) tx.lifecycle(row.id, "deleted");
+      }
+    }
     async function saveTrip(data, ctx) {
       const field = (key) => String(data.get(key) || "").trim(), original = ctx.id ? values(ctx.basis.get(ctx.id)) : {};
       const patch = { name: field("name"), date: field("date"), endDate: field("endDate"), location: field("location"), duration: field("duration"), level: field("level"), campType: field("campType"), siteAmenities: data.getAll("amenity"), power: data.getAll("amenity").includes("power"), goals: data.getAll("goal"), prep: data.has("prep"), mapShare: field("mapShare"), address: field("address"), contact: field("contact"), planningRuleVersion: 2 };
-      const selected = data.getAll("recipe").map((id) => find("recipes", id));
+      const selectedIds = data.getAll("recipe"), selected = selectedIds.map((id) => find("recipes", id));
+      if (selected.some((recipe) => !recipe)) throw new Error("\u9078\u53D6\u7684\u6599\u7406\u5DF2\u8B8A\u66F4\uFF0C\u8ACB\u91CD\u65B0\u958B\u555F\u8868\u55AE\u5F8C\u518D\u5132\u5B58\u3002");
       const tripId = ctx.id || newId();
       const planning = { ...original, ...patch, recipeIds: selected.map((r) => r.id), recipeMeals: {}, items: [], shopping: [], overrides: { added: [], removed: [] } };
       const suggestions = legacy.suggestPacking(clone(planning));
-      return commands.run(ctx.id ? "edit-trip" : "create-trip", (tx) => {
-        if (ctx.id) editFields(tx, tripId, Object.fromEntries(Object.entries(patch).filter(([k, v]) => JSON.stringify(original[k]) !== JSON.stringify(v))));
-        else tx.create("trip", { ...patch, id: tripId, code: "C-" + patch.date.replaceAll("-", "") + "-" + tripId.slice(0, 4), createdAt: (/* @__PURE__ */ new Date()).toISOString(), status: "active", revision: 1 }, { id: tripId });
-        for (const row of suggestions) {
-          const gear = find("gear", row.gearId);
-          if (!gear) continue;
-          const id = stableId("packing", tripId, gear.syncId);
-          if (!tx.entities.has(id)) tx.create("packing", { ...row, gearId: gear.syncId, snapshot: clone(gear), checked: false, manual: false }, { id, parentId: tripId });
-        }
-        for (const recipe of selected) {
-          const id = stableId("recipe-link", tripId, recipe.syncId);
-          if (tx.entities.has(id)) {
-            const relation = tx.entities.get(id);
-            if (relation.lifecycle === "active") continue;
-            tx.lifecycle(id, "active");
-            tx.set(id, ["recipeId"], recipe.syncId);
-            setRelationSnapshot(tx, relation, clone(recipe));
-            tx.set(id, ["meal"], "");
-          } else tx.create("relation", { recipeId: recipe.syncId, snapshot: clone(recipe), meal: "" }, { id, parentId: tripId });
-          for (const name of recipe.ingredients || []) tx.create("shopping", { name, recipeId: recipe.syncId, recipeName: recipe.name, checked: false }, { parentId: tripId });
-        }
-        for (const e of tx.entities.values()) if (e.parentId === tripId && e.lifecycle === "active" && e.kind === "relation" && !selected.some((r) => r.syncId === values(e).recipeId)) {
-          tx.lifecycle(e.id, "deleted");
-          for (const row of tx.entities.values()) if (row.parentId === tripId && row.kind === "shopping" && row.lifecycle === "active" && values(row).recipeId === values(e).recipeId) tx.lifecycle(row.id, "deleted");
-        }
-        setSetting(tx, "activeTripId", tripId);
-      }, { basis: ctx.basis });
+      if (!ctx.id) {
+        await commands.createTrip({ ...patch, id: tripId, code: "C-" + patch.date.replaceAll("-", "") + "-" + tripId.slice(0, 4), createdAt: (/* @__PURE__ */ new Date()).toISOString(), status: "active", revision: 1 }, { id: tripId });
+        await commands.setting("activeTripId", tripId);
+        return commands.run("seed-trip-plan", (tx) => reconcileTripPlan(tx, tripId, selected, suggestions));
+      }
+      const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => JSON.stringify(original[k]) !== JSON.stringify(v)));
+      if (Object.keys(changed).length) await commands.edit(tripId, changed, ctx.basis);
+      await commands.setting("activeTripId", tripId);
+      return commands.run("reconcile-trip-plan", (tx) => reconcileTripPlan(tx, tripId, selected, suggestions));
     }
     async function downloadBackup() {
       const payload = { format: "camp-v8-backup", exportedAt: (/* @__PURE__ */ new Date()).toISOString(), entities: [...(await repository.documents()).entities.values()], commands: (await repository.db.commands.find().exec()).map((d) => d.toJSON()), backups: (await repository.db.backups.find().exec()).map((d) => d.toJSON()) };
