@@ -941,9 +941,14 @@ tripDialog = openTripEditor;
 
 function optionalPackingSuggestions(tripData) {
   const limits = { L1: 16, L2: 28, L3: 40, L4: 54 };
+  const weightLimits = { L1: 12000, L2: 20000, L3: 30000, L4: 45000 };
   const limit = limits[tripData.level] || 28;
+  const weightLimit = weightLimits[tripData.level] || 20000;
   const extraCount = Math.max(0, (tripData.items || []).length - limit);
-  if (!extraCount) return { limit, extraCount: 0, candidates: [] };
+  const totalWeightGrams = (tripData.items || []).reduce((total, item) => total + (Number(item.weightGrams) || 0), 0);
+  const extraWeightGrams = Math.max(0, totalWeightGrams - weightLimit);
+  const suggestionCount = Math.max(extraCount, extraWeightGrams ? 1 : 0);
+  if (!suggestionCount) return { limit, weightLimit, extraCount: 0, extraWeightGrams: 0, totalWeightGrams, candidates: [] };
   const optionalReason = /適用情境|氣氛|拍照|野餐|咖啡茶飲|親友同樂|基本行程/;
   const essentialReason = /料理|過夜|營地|現場|焚火|遮陽|避雨/;
   const candidates = (tripData.items || [])
@@ -1008,11 +1013,12 @@ function optionalPackingSuggestions(tripData) {
       const leftOptional = optional.test(left.reason || '') || left.manual;
       const rightOptional = optional.test(right.reason || '') || right.manual;
       return leftUsage - rightUsage || Number(rightOptional) - Number(leftOptional)
+        || (Number(right.weightGrams) || 0) - (Number(left.weightGrams) || 0)
         || String(left.name || '').localeCompare(String(right.name || ''), 'zh-Hant');
     })
-    .slice(0, Math.min(extraCount, 5))
+    .slice(0, Math.min(suggestionCount, 5))
     .map(item => ({ ...item, usage: usageCount(item, counts) }));
-  return { limit, extraCount, candidates };
+  return { limit, weightLimit, extraCount, extraWeightGrams, totalWeightGrams, candidates };
 }
 
 function decorateTripDetails() {
@@ -1035,7 +1041,9 @@ function decorateTripDetails() {
     if (list && listTab === 'pack' && state.preferences?.autoTrimSuggestions !== false && !document.querySelector('.packing-suggestions')) {
       const suggestion = optionalPackingSuggestions(current);
       if (suggestion.extraCount && suggestion.candidates.length) {
-        list.insertAdjacentHTML('afterbegin', `<section class="packing-suggestions"><h3>精簡建議</h3><p>目前 ${current.items.length} 件，${levelText[current.level]} 建議約 ${suggestion.limit} 件內。優先列出已歸檔行程中使用次數較低的裝備；常用裝備會排在後面。</p><div class="suggestion-list">${suggestion.candidates.map(item => `<div><span>${esc(item.name)}<small>已使用 ${item.usage} 次</small></span><button type="button" class="ghost" data-action="remove-from-trip" data-id="${esc(item.gearId)}">不帶這件</button></div>`).join('')}</div></section>`);
+        const overCount = suggestion.extraCount ? `件數超出 ${suggestion.extraCount} 件` : '';
+        const overWeight = suggestion.extraWeightGrams ? `預估負重超出 ${(suggestion.extraWeightGrams / 1000).toFixed(1)} 公斤` : '';
+        list.insertAdjacentHTML('afterbegin', `<section class="packing-suggestions"><h3>精簡建議</h3><p>目前 ${current.items.length} 件、預估 ${(suggestion.totalWeightGrams / 1000).toFixed(1)} 公斤；${levelText[current.level]} 目標約 ${suggestion.limit} 件、${(suggestion.weightLimit / 1000).toFixed(0)} 公斤內。${[overCount, overWeight].filter(Boolean).join('，')}。優先列出使用次數較低、較大或較重的裝備。</p><div class="suggestion-list">${suggestion.candidates.map(item => `<div><span>${esc(item.name)}<small>已使用 ${item.usage} 次${item.weightGrams ? ` · ${(Number(item.weightGrams) / 1000).toFixed(2)} 公斤` : ''}</small></span><button type="button" class="ghost" data-action="remove-from-trip" data-id="${esc(item.gearId)}">不帶這件</button></div>`).join('')}</div></section>`);
       }
     }
   }
@@ -2075,7 +2083,9 @@ gearRows = function gearRowsWithUsageRanking(gearRows) {
   return sortByUsage(gearRows, counts).map(gear => {
     const count = usageCount(gear, counts);
     const usage = count ? ` · 常用：已使用 ${count} 次` : ' · 尚無使用紀錄';
-    return `<div class="gear-row"><button class="gear-open" data-action="edit-gear" data-id="${esc(gear.id)}"><span><span class="item-name">${esc(gear.name)}</span><span class="reason">${esc(gear.category)} · ${esc(gear.location || '未填收納位置')}${usage}</span></span></button><button type="button" class="favorite ${gear.favorite ? 'is-favorite' : ''}" data-action="toggle-gear-favorite" data-id="${esc(gear.id)}" aria-label="${gear.favorite ? '取消最愛' : '標記最愛'} ${esc(gear.name)}">${gear.favorite ? '★' : '☆'}</button></div>`;
+    const sizeLabel = ({ xs: '極小', small: '小型', medium: '中型', large: '大型', xl: '特大型' })[gear.size] || '未填尺寸';
+    const specs = [sizeLabel, gear.dimensions, gear.weightGrams ? `${gear.weightGrams} g` : '未填重量'].filter(Boolean).join(' · ');
+    return `<div class="gear-row"><button class="gear-open" data-action="edit-gear" data-id="${esc(gear.id)}"><span><span class="item-name">${esc(gear.name)}</span><span class="reason">${esc(gear.category)} · ${esc(gear.location || '未填收納位置')}${usage}<br>${esc(specs)}</span></span></button><button type="button" class="favorite ${gear.favorite ? 'is-favorite' : ''}" data-action="toggle-gear-favorite" data-id="${esc(gear.id)}" aria-label="${gear.favorite ? '取消最愛' : '標記最愛'} ${esc(gear.name)}">${gear.favorite ? '★' : '☆'}</button></div>`;
   }).join('');
 };
 
@@ -2091,7 +2101,8 @@ renderLists = function renderListsWithUsageRanking() {
   const counts = gearUsageCounts();
   const packGroups = groupItems(sortByUsage(currentTrip.items, counts));
   const shoppingRows = shoppingProgressRows(currentTrip);
-  return `<section class="page"><p class="eyebrow">行程清單 · ${currentTrip.code}</p><h2 class="title">${esc(currentTrip.name)}</h2><p class="trip-context">${currentTrip.date}　${esc(currentTrip.location || '未填地點')}<br>${currentTrip.duration === 'overnight' ? '2 日 1 夜' : '日歸'} · ${levelText[currentTrip.level]}　｜　目的：${esc(cardPurpose(currentTrip))}</p><div class="split"><button class="${listTab === 'pack' ? 'primary' : 'secondary'}" data-listtab="pack">帶什麼 ${done(currentTrip.items)}/${currentTrip.items.length}</button><button class="${listTab === 'shop' ? 'primary' : 'secondary'}" data-listtab="shop">買什麼 ${done(shoppingRows)}/${shoppingRows.length}</button></div><div id="list-body">${listTab === 'pack' ? renderPack(packGroups) : renderShop(currentTrip.shopping)}</div></section>`;
+  const totalWeightGrams = currentTrip.items.reduce((total, item) => total + (Number(item.weightGrams) || 0), 0);
+  return `<section class="page"><p class="eyebrow">行程清單 · ${currentTrip.code}</p><h2 class="title">${esc(currentTrip.name)}</h2><p class="trip-context">${currentTrip.date}　${esc(currentTrip.location || '未填地點')}<br>${currentTrip.duration === 'overnight' ? '2 日 1 夜' : '日歸'} · ${levelText[currentTrip.level]}　｜　目的：${esc(cardPurpose(currentTrip))}</p><div class="split"><button class="${listTab === 'pack' ? 'primary' : 'secondary'}" data-listtab="pack">帶什麼 ${done(currentTrip.items)}/${currentTrip.items.length}</button><button class="${listTab === 'shop' ? 'primary' : 'secondary'}" data-listtab="shop">買什麼 ${done(shoppingRows)}/${shoppingRows.length}</button></div><p class="sub packing-weight">裝備預估負重：${(totalWeightGrams / 1000).toFixed(2)} 公斤</p><div id="list-body">${listTab === 'pack' ? renderPack(packGroups) : renderShop(currentTrip.shopping)}</div></section>`;
 };
 
 renderPack = function renderPackWithUsageLabels(groups) {
@@ -2102,6 +2113,17 @@ renderPack = function renderPackWithUsageLabels(groups) {
     const usage = count ? ` · 常用：${count} 次` : ' · 尚無使用紀錄';
     return `<div class="item ${item.checked ? 'checked' : ''}"><input aria-label="${esc(item.name)}" type="checkbox" data-pack="${item.gearId}" ${item.checked ? 'checked' : ''}><span style="flex:1"><span class="item-name">${esc(item.name)}</span><span class="reason">${esc(source)}${usage}</span></span><button class="ghost" aria-label="從本次清單移除 ${esc(item.name)}" data-action="remove-from-trip" data-id="${item.gearId}">×</button></div>`;
   }).join('')}</div>`).join('') + `<div class="actions"><button class="secondary" data-action="add-to-trip">手動加入裝備</button></div>`;
+};
+
+gearDialog = function gearDialogWithMeasurements(existing) {
+  const gear = existing || {
+    id: nextGearId('生活清潔'), name: '', category: '生活清潔', location: state.locations?.[0] || '',
+    note: '', size: 'medium', dimensions: '', weightGrams: 0,
+    levels: ['L1', 'L2', 'L3', 'L4'], contexts: [], links: []
+  };
+  const sizes = [['xs', '極小（口袋／配件）'], ['small', '小型（手提）'], ['medium', '中型（收納袋）'], ['large', '大型（箱／袋）'], ['xl', '特大型（需獨立搬運）']];
+  const root = dialog(`<h2>${existing ? '編輯裝備' : '新增裝備'}</h2><form id="gear-form"><input type="hidden" name="id" value="${esc(gear.id)}"><p class="system-id">系統編號：<strong id="auto-id">${esc(gear.id)}</strong></p><div class="form-grid"><div class="field"><label>裝備類別</label><select name="category">${categories.map(category => `<option ${gear.category === category ? 'selected' : ''}>${category}</option>`).join('')}</select></div><div class="field"><label>收納尺寸分級</label><select name="size">${sizes.map(([value, label]) => `<option value="${value}" ${gear.size === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field full"><label>名稱</label><input name="name" required value="${esc(gear.name)}" placeholder="例如：摺疊洗手盆"></div><div class="field"><label>收納尺寸（選填）</label><input name="dimensions" value="${esc(gear.dimensions || '')}" placeholder="長 × 寬 × 高 cm"></div><div class="field"><label>重量（選填，克）</label><input name="weightGrams" type="number" min="0" step="1" value="${Number(gear.weightGrams) || ''}" placeholder="例如：850"></div><div class="field full"><label>收納位置</label><input name="location" list="locations" value="${esc(gear.location)}"><datalist id="locations">${(state.locations || []).map(location => `<option value="${esc(location)}">`).join('')}</datalist></div><div class="field full"><label>適用量級</label><div class="compact-options">${Object.entries(levelText).map(([value, label]) => `<label><input name="level" type="checkbox" value="${value}" ${(gear.levels || []).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div></div><div class="field full"><label>適用情境</label><div class="compact-options">${Object.entries(goalText).map(([value, label]) => `<label><input name="context" type="checkbox" value="${value}" ${(gear.contexts || []).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div></div><div class="field full"><label>備註／搭配需求</label><textarea name="note">${esc(gear.note || '')}</textarea></div></div><p class="notice">重量會納入本次行程的預估負重；未填重量會以 0 公斤計算，且清單會標示未填。</p><div class="actions"><button class="primary">儲存至我的裝備</button><button type="button" class="secondary" id="cancel">取消</button>${existing ? '<button type="button" class="ghost danger" id="delete-gear">刪除</button>' : ''}</div></form>`);
+  $('#cancel', root).onclick = closeDialog;
 };
 
 /* Classic-script bridge: these names belong to the existing UI, not the sync engine. */

@@ -41990,6 +41990,9 @@ ${suffix}`;
             category: gear?.category ?? row.category ?? saved.category,
             location: gear?.location ?? row.location ?? saved.location,
             note: gear?.note ?? row.note ?? saved.note,
+            size: gear?.size ?? row.size ?? saved.size,
+            dimensions: gear?.dimensions ?? row.dimensions ?? saved.dimensions,
+            weightGrams: gear?.weightGrams ?? row.weightGrams ?? saved.weightGrams ?? 0,
             syncId: child.id
           };
           if (child.lifecycle === "active") {
@@ -42515,7 +42518,7 @@ ${suffix}`;
       if (id === "gear-form" || id === "recipe-form") {
         const kind = id === "gear-form" ? "gear" : "recipe";
         const original = ctx.id ? values(ctx.basis.get(ctx.id)) : {};
-        const patch = kind === "gear" ? { id: text("id") || root.querySelector("#auto-id")?.textContent.trim() || newId(), name: text("name"), category: text("category"), location: text("location"), note: text("note"), size: text("size") || "medium", levels: data.getAll("level"), contexts: data.getAll("context"), owned: true } : { id: original.id || "RCP-" + newId().slice(0, 8), name: text("name"), type: text("type"), effort: text("effort"), meal: original.meal || "\u4E0D\u9650", ingredients: lines(text("ingredients")), gearRefs: data.getAll("gear").map((id2) => find("gear", id2).syncId), onsite: data.get("onsite") === "on" };
+        const patch = kind === "gear" ? { id: text("id") || root.querySelector("#auto-id")?.textContent.trim() || newId(), name: text("name"), category: text("category"), location: text("location"), note: text("note"), size: text("size") || "medium", dimensions: text("dimensions"), weightGrams: Math.max(0, Number(text("weightGrams")) || 0), levels: data.getAll("level"), contexts: data.getAll("context"), owned: true } : { id: original.id || "RCP-" + newId().slice(0, 8), name: text("name"), type: text("type"), effort: text("effort"), meal: original.meal || "\u4E0D\u9650", ingredients: lines(text("ingredients")), gearRefs: data.getAll("gear").map((id2) => find("gear", id2).syncId), onsite: data.get("onsite") === "on" };
         if (kind === "recipe") patch.ingredients = patch.ingredients.map(normalizeDrinkingWater);
         if (ctx.id) {
           const changed = Object.fromEntries(Object.entries(patch).filter(([key, value]) => JSON.stringify(original[key]) !== JSON.stringify(value)));
