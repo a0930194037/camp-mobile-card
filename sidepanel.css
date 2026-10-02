@@ -19,3 +19,7 @@
 .water-plan .section-head { margin-top:16px; }
 .water-row { align-items:center; }
 .water-actions { min-height:40px; align-items:center; margin:9px 0 2px; }
+
+/* Archived entries are buttons. Make every row use the section's full width
+   so the right-side archive state lines up across all trips. */
+.record-open { display:block; width:100%; text-align:left; }
