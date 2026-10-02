@@ -13,5 +13,9 @@
 .gear-row .tag { display:none; }
 
 /* Keep the three per-recipe actions on one visual baseline. */
-.shopping-recipe-actions { align-items:center; min-height:40px; }
-.shopping-recipe-actions .ghost { display:inline-flex; align-items:center; justify-content:center; height:36px; white-space:nowrap; }
+.shopping-recipe-actions { display:flex; align-items:center; min-height:48px; margin:12px 0 10px; }
+.shopping-recipe-actions .ghost { display:inline-flex; align-items:center; justify-content:center; min-height:36px; white-space:nowrap; line-height:1; }
+.water-plan { margin:24px 0 10px; padding-top:2px; border-top:1px solid var(--line); }
+.water-plan .section-head { margin-top:16px; }
+.water-row { align-items:center; }
+.water-actions { min-height:40px; align-items:center; margin:9px 0 2px; }

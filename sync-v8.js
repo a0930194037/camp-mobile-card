@@ -41814,6 +41814,11 @@ ${suffix}`;
   // sync-v8/legacy-adapter.js
   var esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   var lines = (s) => String(s || "").split(/\r?\n/).map((s2) => s2.trim()).filter(Boolean);
+  var normalizeDrinkingWater = (s) => String(s || "").trim().replace(/熱水\s*/g, "\u98F2\u7528\u6C34");
+  var waterSignature = (s) => {
+    const match = normalizeDrinkingWater(s).match(/^飲用水\s*(\d+(?:\.\d+)?)\s*ml$/i);
+    return match ? `water:${Math.round(Number(match[1]))}` : null;
+  };
   function installLegacyAdapter({ repository, legacy, onSettings = () => {
   } }) {
     const commands = new CampCommands(repository), root = legacy.document || document;
@@ -41880,6 +41885,10 @@ ${suffix}`;
       light.onclick = (e) => e.preventDefault();
     }
     const currentTrip = () => legacy.state.trips.find((t) => t.id === legacy.state.activeTripId);
+    const openWaterDialog = (tripData) => {
+      context3 = { name: "water", tripId: tripData.syncId, basis: basis() };
+      legacy.dialog(`<form id="water-form"><h2>\u65B0\u589E\u7528\u6C34</h2><div class="field"><label>\u7528\u9014</label><input name="name" required value="\u98F2\u7528\u6C34" placeholder="\u4F8B\u5982\uFF1A\u6CE1\u8336\u5099\u7528"></div><div class="field"><label>\u6C34\u91CF\uFF08ml\uFF09</label><input name="ml" type="number" min="1" step="50" required value="500"></div><div class="actions"><button class="primary">\u52A0\u5165</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
+    };
     const find = (collection, id) => legacy.state[collection].find((e) => e.id === id || e.syncId === id);
     const basis = () => new Map([...displayedEntities].map(([id, e]) => [id, clone(e)]));
     function open(name, id, ...args) {
@@ -42012,6 +42021,24 @@ ${suffix}`;
       if (name === "add-to-trip") return open("manual", t.syncId);
       if (name === "archive-trip") return open("archive", t.syncId);
       if (name === "add-extra-dish") return open("extra", data.recipeId, data.recipeId);
+      if (name === "add-water") return openWaterDialog(t);
+      if (name === "remove-water") return commands.run("remove-water", (tx) => {
+        const tripEntity = tx.entities.get(t.syncId), existing = values(tripEntity).waterOverrides || {};
+        const removed = new Set(existing.removed || []);
+        removed.add(data.waterKey);
+        tx.set(t.syncId, ["waterOverrides"], { ...existing, removed: [...removed] });
+      });
+      if (name === "remove-shopping") {
+        const row = t.shopping.find((r) => r.shoppingKey === data.shoppingKey) || t.shopping[Number(data.index)], signature = waterSignature(row?.name);
+        if (signature) return commands.run("remove-water-ingredient", (tx) => {
+          const target = values(tx.entities.get(row.syncId)), recipe = find("recipes", row.recipeId);
+          for (const entity of tx.entities.values()) if (entity.parentId === t.syncId && entity.kind === "shopping" && entity.lifecycle === "active") {
+            const value = values(entity);
+            if (value.recipeId === target.recipeId && waterSignature(value.name) === signature) tx.lifecycle(entity.id, "deleted");
+          }
+          if (recipe) markRecipeIngredientsChanged(tx, t.syncId, recipe.syncId);
+        });
+      }
       if (name === "toggle-gear-favorite" || name === "toggle-recipe-favorite") {
         const e = find(name.includes("gear") ? "gear" : "recipes", data.id);
         return run(null, () => commands.favorite(e.syncId, !e.favorite));
@@ -42153,10 +42180,16 @@ ${suffix}`;
     async function submit(id, data, ctx, form) {
       const text = (key) => String(data.get(key) || "").trim();
       if (id === "manual-add-form") return commands.addPacking(ctx.tripId, [...form.querySelectorAll("input:checked")].map((e) => find("gear", e.value).syncId));
+      if (id === "water-form") return commands.run("add-water", (tx) => {
+        const tripEntity = tx.entities.get(ctx.tripId), existing = values(tripEntity).waterOverrides || {};
+        const name = normalizeDrinkingWater(text("name")) || "\u98F2\u7528\u6C34", ml = Math.max(1, Math.round(Number(text("ml")) || 0));
+        tx.set(ctx.tripId, ["waterOverrides"], { ...existing, added: [...existing.added || [], { id: newId(), name, ml }] });
+      });
       if (id === "gear-form" || id === "recipe-form") {
         const kind = id === "gear-form" ? "gear" : "recipe";
         const original = ctx.id ? values(ctx.basis.get(ctx.id)) : {};
         const patch = kind === "gear" ? { id: text("id") || root.querySelector("#auto-id")?.textContent.trim() || newId(), name: text("name"), category: text("category"), location: text("location"), note: text("note"), size: text("size") || "medium", levels: data.getAll("level"), contexts: data.getAll("context"), owned: true } : { id: original.id || "RCP-" + newId().slice(0, 8), name: text("name"), type: text("type"), effort: text("effort"), meal: original.meal || "\u4E0D\u9650", ingredients: lines(text("ingredients")), gearRefs: data.getAll("gear").map((id2) => find("gear", id2).syncId), onsite: data.get("onsite") === "on" };
+        if (kind === "recipe") patch.ingredients = patch.ingredients.map(normalizeDrinkingWater);
         if (ctx.id) {
           const changed = Object.fromEntries(Object.entries(patch).filter(([key, value]) => JSON.stringify(original[key]) !== JSON.stringify(value)));
           return commands.edit(ctx.id, changed, ctx.basis);

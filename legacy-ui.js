@@ -1686,6 +1686,64 @@ renderShop = function(items) {
   }).join('')}`;
 };
 
+// Water is calculated from the current trip, while manual additions/removals
+// live on the trip record so they remain stable across devices and rebuilds.
+const normalizeDrinkingWater = value => String(value || '').trim().replace(/熱水\s*/g, '飲用水');
+const waterAmount = value => {
+  const match = normalizeDrinkingWater(value).match(/^飲用水\s*(\d+(?:\.\d+)?)\s*ml$/i);
+  return match ? Math.round(Number(match[1])) : 0;
+};
+const waterDays = tripData => {
+  if (tripData?.duration === 'day') return 1;
+  if (tripData?.duration === 'overnight') return 2;
+  const start = Date.parse(tripData?.date || ''), end = Date.parse(tripData?.endDate || '');
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start ? Math.round((end - start) / 86400000) + 1 : 2;
+};
+const waterRequirements = tripData => {
+  const overrides = tripData?.waterOverrides || {}, removed = new Set(overrides.removed || []);
+  const days = waterDays(tripData), rows = [{ key: 'drinking', name: '日常飲用水', ml: days * 2000, reason: `每人 ${days} 天飲用` }];
+  const seenRecipeWater = new Set();
+  for (const row of tripData?.shopping || []) {
+    const ml = waterAmount(row.name); if (!ml) continue;
+    const key = `recipe:${row.recipeId || ''}:${ml}`;
+    if (seenRecipeWater.has(key)) continue;
+    seenRecipeWater.add(key);
+    rows.push({ key, name: '料理飲用水', ml, reason: row.recipeName || '料理所需' });
+  }
+  if (tripData?.campType === 'wild') {
+    rows.push({ key: 'wild-handwash', name: '洗手用水', ml: 1000, reason: '野營無固定洗手設施' });
+    rows.push({ key: 'wild-dishes', name: '洗碗用水', ml: 2000, reason: '野營清洗餐具' });
+  }
+  for (const row of overrides.added || []) rows.push({ key: `manual:${row.id}`, name: row.name || '自訂飲用水', ml: Number(row.ml) || 0, reason: '手動新增' });
+  return rows.filter(row => row.ml > 0 && !removed.has(row.key));
+};
+const renderWaterPlan = tripData => {
+  const rows = waterRequirements(tripData), total = rows.reduce((sum, row) => sum + row.ml, 0);
+  return `<section class="water-plan"><div class="section-head"><h2>建議攜帶飲用水</h2><span>${total} ml</span></div><p class="sub">包含日常飲食與每道料理所需；野營另計洗手、洗碗用水。</p><div class="list">${rows.map(row => `<div class="item water-row"><span style="flex:1"><span class="item-name">${esc(row.name)} ${row.ml}ml</span><span class="reason">${esc(row.reason)}</span></span><button type="button" class="shopping-remove" data-action="remove-water" data-water-key="${esc(row.key)}" aria-label="移除 ${esc(row.name)}">×</button></div>`).join('')}</div><div class="actions water-actions"><button type="button" class="ghost" data-action="add-water">新增用水</button></div></section>`;
+};
+
+// Keep every recipe's three actions in a single, fixed-height row and make
+// water naming consistent without mutating render-time state.
+renderShop = function renderShopWithWaterPlan(items) {
+  const currentTrip = trip(), groups = (items || []).reduce((all, item, index) => {
+    const id = item.recipeId || 'other';
+    (all[id] ??= { id, name: item.recipeName || '其他料理', meal: item.meal || '', items: [] }).items.push({ ...item, name: normalizeDrinkingWater(item.name), index });
+    return all;
+  }, {});
+  for (const recipeId of currentTrip?.recipeIds || []) {
+    if (groups[recipeId]) continue;
+    const recipe = state.recipes.find(entry => entry.id === recipeId) || currentTrip.recipeSnapshots?.[recipeId];
+    if (recipe) groups[recipeId] = { id: recipeId, name: recipe.name, meal: currentTrip.recipeMeals?.[recipeId] || '', items: [] };
+  }
+  const slotOptions = ['', '早餐', '午餐', '晚餐', '宵夜'];
+  const content = Object.values(groups).map(group => {
+    const modified = !!currentTrip?.recipeModified?.[group.id];
+    const shown = group.items.filter((item, index, source) => !waterAmount(item.name) || source.findIndex(other => waterAmount(other.name) === waterAmount(item.name)) === index);
+    return `<section class="shopping-recipe"><div class="shopping-recipe-title"><select class="recipe-slot" data-recipe-slot="${esc(group.id)}" aria-label="${esc(group.name)}的用餐時段">${slotOptions.map(slot => `<option value="${slot}" ${group.meal === slot ? 'selected' : ''}>${slot || '未設定'}</option>`).join('')}</select><strong>${esc(group.name)}</strong><em>${done(shown)}/${shown.length}</em></div><div class="list">${shown.map(item => `<div class="item shopping-item ${item.checked ? 'checked' : ''}"><input type="checkbox" data-shop="${item.index}" ${item.checked ? 'checked' : ''}><span class="item-name">${esc(item.name)}</span><button type="button" class="shopping-remove" data-action="remove-shopping" data-index="${item.index}" data-shopping-key="${esc(item.shoppingKey || `recipe:${item.recipeId}:${item.name}`)}" aria-label="移除 ${esc(item.name)}">×</button></div>`).join('')}</div><div class="actions shopping-recipe-actions"><button type="button" class="ghost add-extra-dish" data-action="add-extra-dish" data-recipe-id="${esc(group.id)}">額外加菜</button>${modified ? `<button type="button" class="ghost" data-action="save-modified-recipe" data-recipe-id="${esc(group.id)}">另存料理</button><button type="button" class="ghost" data-action="replace-modified-recipe" data-recipe-id="${esc(group.id)}">取代料理</button>` : ''}</div></section>`;
+  }).join('');
+  return `<div class="section-head"><h2>採買清單</h2><span>${done(items || [])}/${(items || []).length}</span></div>${content || '<p class="sub">尚未選擇料理。</p>'}${renderWaterPlan(currentTrip)}`;
+};
+
 const levelPresetFallbacks = {
   L1: ['F04', 'F06', 'F02', 'C01', 'C07', 'T02', 'T04', 'L05', 'L06', 'X01'],
   L2: ['F03', 'F04', 'F06', 'F01', 'C01', 'C07', 'T01', 'T02', 'T04', 'L05', 'L06', 'X01'],
