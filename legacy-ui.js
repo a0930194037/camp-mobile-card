@@ -952,6 +952,69 @@ function optionalPackingSuggestions(tripData) {
   return { limit, extraCount, candidates };
 }
 
+function archivedPackingRows(log) {
+  const projected = log.archivedTrip?.items || log.tripSnapshot?.items;
+  if (Array.isArray(projected) && projected.length) return projected;
+  return (log.childrenSnapshot || [])
+    .filter(row => row.kind === 'packing')
+    .map(row => row.data || row);
+}
+
+function gearUsageCounts() {
+  // Archived packing rows are immutable history. Items explicitly marked as
+  // unused are excluded, so this records actual use rather than suggestions.
+  const aliases = new Map();
+  for (const gear of state.gear || []) {
+    const canonical = gear.syncId || gear.id;
+    for (const id of [canonical, gear.id]) if (id) aliases.set(String(id), canonical);
+  }
+  const counts = new Map();
+  for (const log of state.logs || []) {
+    const unused = new Set((log.unused || []).map(String));
+    for (const row of archivedPackingRows(log)) {
+      const ids = [row.gearSyncId, row.gearId, row.id, row.snapshot?.gearId, row.snapshot?.id]
+        .filter(Boolean).map(String);
+      const canonical = ids.map(id => aliases.get(id)).find(Boolean);
+      if (!canonical || ids.some(id => unused.has(id))) continue;
+      counts.set(canonical, (counts.get(canonical) || 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function usageCount(gearOrItem, counts = gearUsageCounts()) {
+  return counts.get(gearOrItem.gearSyncId || gearOrItem.syncId || gearOrItem.gearId || gearOrItem.id) || 0;
+}
+
+function sortByUsage(items, counts = gearUsageCounts()) {
+  return [...items].sort((left, right) =>
+    usageCount(right, counts) - usageCount(left, counts)
+    || Number(!!right.favorite) - Number(!!left.favorite)
+    || String(left.name || '').localeCompare(String(right.name || ''), 'zh-Hant'));
+}
+
+// Replaces the earlier reason-only suggestion. It could fail to match
+// migrated reason strings and left an over-limit L1 list without suggestions.
+function optionalPackingSuggestions(tripData) {
+  const limits = { L1: 16, L2: 28, L3: 40, L4: 54 };
+  const limit = limits[tripData.level] || 28;
+  const extraCount = Math.max(0, (tripData.items || []).length - limit);
+  if (!extraCount) return { limit, extraCount: 0, candidates: [] };
+  const counts = gearUsageCounts();
+  const optional = /拍照|咖啡|氣氛|朋友|娛樂|休閒|備用|手動加入/;
+  const candidates = [...(tripData.items || [])]
+    .sort((left, right) => {
+      const leftUsage = usageCount(left, counts), rightUsage = usageCount(right, counts);
+      const leftOptional = optional.test(left.reason || '') || left.manual;
+      const rightOptional = optional.test(right.reason || '') || right.manual;
+      return leftUsage - rightUsage || Number(rightOptional) - Number(leftOptional)
+        || String(left.name || '').localeCompare(String(right.name || ''), 'zh-Hant');
+    })
+    .slice(0, Math.min(extraCount, 5))
+    .map(item => ({ ...item, usage: usageCount(item, counts) }));
+  return { limit, extraCount, candidates };
+}
+
 function decorateTripDetails() {
   // 行程摘要只屬於「行程卡片」與「本次清單」。
   // 其他頁面也有 .sub（例如裝備／料理的筆數），不能共用這個選取器。
@@ -972,7 +1035,7 @@ function decorateTripDetails() {
     if (list && listTab === 'pack' && state.preferences?.autoTrimSuggestions !== false && !document.querySelector('.packing-suggestions')) {
       const suggestion = optionalPackingSuggestions(current);
       if (suggestion.extraCount && suggestion.candidates.length) {
-        list.insertAdjacentHTML('afterbegin', `<section class="packing-suggestions"><h3>精簡建議</h3><p>目前 ${current.items.length} 件，${levelText[current.level]} 建議約 ${suggestion.limit} 件內。以下屬於情境加選，可視需要不帶。</p><div class="suggestion-list">${suggestion.candidates.map(item => `<div><span>${esc(item.name)}</span><button type="button" class="ghost" data-action="remove-from-trip" data-id="${esc(item.gearId)}">不帶這件</button></div>`).join('')}</div></section>`);
+        list.insertAdjacentHTML('afterbegin', `<section class="packing-suggestions"><h3>精簡建議</h3><p>目前 ${current.items.length} 件，${levelText[current.level]} 建議約 ${suggestion.limit} 件內。優先列出已歸檔行程中使用次數較低的裝備；常用裝備會排在後面。</p><div class="suggestion-list">${suggestion.candidates.map(item => `<div><span>${esc(item.name)}<small>已使用 ${item.usage} 次</small></span><button type="button" class="ghost" data-action="remove-from-trip" data-id="${esc(item.gearId)}">不帶這件</button></div>`).join('')}</div></section>`);
       }
     }
   }
@@ -2003,6 +2066,43 @@ document.addEventListener('click', async event => {
   await commitMutation(async () => { recycleEntity('gear', entity); state.gear = state.gear.filter(item => item.syncId !== entity.syncId); });
   closeDialog(); render();
 }, true);
+
+// Usage is presentation-only derived history: it never writes to an active
+// trip, so simply opening either page cannot create a sync mutation.
+const gearRowsBeforeUsageRanking = gearRows;
+gearRows = function gearRowsWithUsageRanking(gearRows) {
+  const counts = gearUsageCounts();
+  return sortByUsage(gearRows, counts).map(gear => {
+    const count = usageCount(gear, counts);
+    const usage = count ? ` · 常用：已使用 ${count} 次` : ' · 尚無使用紀錄';
+    return `<div class="gear-row"><button class="gear-open" data-action="edit-gear" data-id="${esc(gear.id)}"><span><span class="item-name">${esc(gear.name)}</span><span class="reason">${esc(gear.category)} · ${esc(gear.location || '未填收納位置')}${usage}</span></span></button><button type="button" class="favorite ${gear.favorite ? 'is-favorite' : ''}" data-action="toggle-gear-favorite" data-id="${esc(gear.id)}" aria-label="${gear.favorite ? '取消最愛' : '標記最愛'} ${esc(gear.name)}">${gear.favorite ? '★' : '☆'}</button></div>`;
+  }).join('');
+};
+
+renderGear = function renderGearWithUsageRanking() {
+  const visible = gearCategoryFilter === 'favorite' ? state.gear.filter(gear => gear.favorite)
+    : gearCategoryFilter === 'all' ? state.gear : state.gear.filter(gear => gear.category === gearCategoryFilter);
+  return `<section class="page"><div class="page-heading"><div><h2 class="title">我的裝備</h2></div><div class="heading-actions"><button class="secondary" data-action="manage-level-defaults">量級預設</button><button class="secondary" data-action="manage-locations">收納位置</button><button class="primary" data-action="add-gear">新增裝備</button></div></div><div class="gear-filter"><label for="gear-category-filter">顯示分類</label><select id="gear-category-filter"><option value="all" ${gearCategoryFilter === 'all' ? 'selected' : ''}>全部裝備</option><option value="favorite" ${gearCategoryFilter === 'favorite' ? 'selected' : ''}>★ 我的最愛</option>${categories.map(category => `<option value="${category}" ${gearCategoryFilter === category ? 'selected' : ''}>${category}</option>`).join('')}</select></div><p class="sub">${visible.length} / ${state.gear.length} 件已登記 · 依已歸檔行程的實際使用次數排序</p><div id="gear-list">${gearRows(visible)}</div></section>`;
+};
+
+renderLists = function renderListsWithUsageRanking() {
+  const currentTrip = trip();
+  if (!currentTrip) return noTrip();
+  const counts = gearUsageCounts();
+  const packGroups = groupItems(sortByUsage(currentTrip.items, counts));
+  const shoppingRows = shoppingProgressRows(currentTrip);
+  return `<section class="page"><p class="eyebrow">行程清單 · ${currentTrip.code}</p><h2 class="title">${esc(currentTrip.name)}</h2><p class="trip-context">${currentTrip.date}　${esc(currentTrip.location || '未填地點')}<br>${currentTrip.duration === 'overnight' ? '2 日 1 夜' : '日歸'} · ${levelText[currentTrip.level]}　｜　目的：${esc(cardPurpose(currentTrip))}</p><div class="split"><button class="${listTab === 'pack' ? 'primary' : 'secondary'}" data-listtab="pack">帶什麼 ${done(currentTrip.items)}/${currentTrip.items.length}</button><button class="${listTab === 'shop' ? 'primary' : 'secondary'}" data-listtab="shop">買什麼 ${done(shoppingRows)}/${shoppingRows.length}</button></div><div id="list-body">${listTab === 'pack' ? renderPack(packGroups) : renderShop(currentTrip.shopping)}</div></section>`;
+};
+
+renderPack = function renderPackWithUsageLabels(groups) {
+  const counts = gearUsageCounts();
+  return Object.entries(groups).map(([category, items]) => `<div class="section-head"><h2>${esc(category)}</h2><span>${done(items)}/${items.length}</span></div><div class="list">${items.map(item => {
+    const count = usageCount(item, counts);
+    const source = item.manual ? '手動加入' : item.reason;
+    const usage = count ? ` · 常用：${count} 次` : ' · 尚無使用紀錄';
+    return `<div class="item ${item.checked ? 'checked' : ''}"><input aria-label="${esc(item.name)}" type="checkbox" data-pack="${item.gearId}" ${item.checked ? 'checked' : ''}><span style="flex:1"><span class="item-name">${esc(item.name)}</span><span class="reason">${esc(source)}${usage}</span></span><button class="ghost" aria-label="從本次清單移除 ${esc(item.name)}" data-action="remove-from-trip" data-id="${item.gearId}">×</button></div>`;
+  }).join('')}</div>`).join('') + `<div class="actions"><button class="secondary" data-action="add-to-trip">手動加入裝備</button></div>`;
+};
 
 /* Classic-script bridge: these names belong to the existing UI, not the sync engine. */
 globalThis.CampLegacy = {
