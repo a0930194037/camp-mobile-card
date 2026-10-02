@@ -20819,14 +20819,35 @@ var CampV8 = (() => {
     addShopping(tripId, name, recipeId = null) {
       return this.run("add-shopping", (tx) => tx.create("shopping", { name, recipeId, checked: false, manual: true }, { parentId: tripId }));
     }
-    addRecipe(tripId, recipeId, meal) {
-      return this.run("add-recipe", (tx) => {
-        const recipe = tx.entities.get(recipeId);
-        if (!recipe || recipe.lifecycle !== "active") throw new Error("\u6599\u7406\u5DF2\u522A\u9664");
-        const snapshot = values(recipe), id = stableId("recipe-link", tripId, recipeId);
-        if (tx.entities.has(id)) throw new Error("\u6599\u7406\u5DF2\u52A0\u5165\u6216\u4F4D\u65BC\u56DE\u6536\u5340");
-        tx.create("relation", { recipeId, meal, snapshot }, { id, parentId: tripId });
-        for (const name of snapshot.ingredients || []) tx.create("shopping", { name, recipeId, meal, checked: false }, { parentId: tripId });
+    addRecipe(tripId, recipeId, meal = "") {
+      return this.addRecipes(tripId, [recipeId], meal);
+    }
+    addRecipes(tripId, recipeIds, meal = "") {
+      return this.run("add-recipes", (tx) => {
+        for (const recipeId of new Set(recipeIds)) {
+          const recipe = tx.entities.get(recipeId);
+          if (!recipe || recipe.kind !== "recipe" || recipe.lifecycle !== "active") throw new Error("\u627E\u4E0D\u5230\u53EF\u52A0\u5165\u7684\u6599\u7406");
+          const snapshot = values(recipe), id = stableId("recipe-link", tripId, recipeId), existing = tx.entities.get(id);
+          if (existing?.lifecycle === "active") continue;
+          if (existing) {
+            tx.lifecycle(id, "active");
+            tx.set(id, ["recipeId"], recipeId);
+            for (const field of flatten(snapshot, ["snapshot"])) tx.set(id, field.path, field.value);
+            tx.set(id, ["meal"], meal);
+          } else tx.create("relation", { recipeId, meal, snapshot }, { id, parentId: tripId });
+          for (const name of snapshot.ingredients || []) tx.create("shopping", { name, recipeId, recipeName: snapshot.name, meal, checked: false }, { parentId: tripId });
+        }
+      });
+    }
+    removeRecipe(tripId, recipeId) {
+      return this.run("remove-recipe", (tx) => {
+        const relation = [...tx.entities.values()].find((entity) => entity.parentId === tripId && entity.kind === "relation" && entity.lifecycle === "active" && values(entity).recipeId === recipeId);
+        if (!relation) return;
+        tx.lifecycle(relation.id, "deleted");
+        for (const row of tx.entities.values()) {
+          const rowValue = values(row);
+          if (row.parentId === tripId && row.kind === "shopping" && row.lifecycle === "active" && rowValue.recipeId === recipeId && !rowValue.waterPlan) tx.lifecycle(row.id, "deleted");
+        }
       });
     }
     archive(tripId, record) {
@@ -42087,6 +42108,16 @@ ${suffix}`;
       context3 = { name: "water", tripId: tripData.syncId, basis: basis() };
       legacy.dialog(`<form id="water-form"><h2>\u65B0\u589E\u7528\u6C34</h2><div class="field"><label>\u7528\u9014</label><input name="name" required value="\u98F2\u7528\u6C34" placeholder="\u4F8B\u5982\uFF1A\u6CE1\u8336\u5099\u7528"></div><div class="field"><label>\u6C34\u91CF\uFF08ml\uFF09</label><input name="ml" type="number" required value="500"></div><div class="actions"><button class="primary">\u52A0\u5165</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
     };
+    const openTripRecipeDialog = (tripData) => {
+      context3 = { name: "trip-recipes", tripId: tripData.syncId, basis: basis() };
+      const selected = new Set(tripData.recipeIds || []);
+      const available = (legacy.state.recipes || []).filter((recipe) => recipe.syncId && !selected.has(recipe.id));
+      if (!available.length) {
+        legacy.notify("\u6240\u6709\u53EF\u7528\u6599\u7406\u90FD\u5DF2\u52A0\u5165\u672C\u6B21\u884C\u7A0B\u3002");
+        return;
+      }
+      legacy.dialog(`<form id="v8-add-trip-recipes"><h2>\u52A0\u5165\u6599\u7406</h2><p class="sub">\u9078\u53D6\u5F8C\u6703\u5EFA\u7ACB\u9019\u6B21\u884C\u7A0B\u5C08\u7528\u7684\u63A1\u8CB7\u5217\uFF1B\u5DF2\u6709\u6599\u7406\u4E0D\u6703\u91CD\u8907\u52A0\u5165\u3002</p><div class="list">${available.map((recipe) => `<label class="item"><input type="checkbox" name="recipe" value="${esc(recipe.syncId)}"><span><span class="item-name">${esc(recipe.name)}</span><span class="reason">${esc(recipe.meal || "\u672A\u5206\u985E")}</span></span></label>`).join("")}</div><div class="actions"><button class="primary">\u52A0\u5165\u6599\u7406</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
+    };
     const find = (collection, id) => legacy.state[collection].find((e) => e.id === id || e.syncId === id);
     const basis = () => new Map([...displayedEntities].map(([id, e]) => [id, clone(e)]));
     function open(name, id, ...args) {
@@ -42226,6 +42257,11 @@ ${suffix}`;
       if (name === "manage-level-defaults") return open("presets");
       if (name === "add-to-trip") return open("manual", t.syncId);
       if (name === "archive-trip") return open("archive", t.syncId);
+      if (name === "add-recipe-to-trip") return openTripRecipeDialog(t);
+      if (name === "remove-recipe-from-trip") {
+        if (!data.recipeSyncId) throw new Error("\u627E\u4E0D\u5230\u9019\u9053\u6599\u7406\u7684\u540C\u6B65\u8CC7\u6599\u3002");
+        return commands.removeRecipe(t.syncId, data.recipeSyncId);
+      }
       if (name === "add-extra-dish") return open("extra", data.recipeId, data.recipeId);
       if (name === "add-water") return openWaterDialog(t);
       if (name === "remove-water") return commands.run("remove-water", (tx) => {
@@ -42416,6 +42452,11 @@ ${suffix}`;
     async function submit(id, data, ctx, form) {
       const text = (key) => String(data.get(key) || "").trim();
       if (id === "manual-add-form") return commands.addPacking(ctx.tripId, [...form.querySelectorAll("input:checked")].map((e) => find("gear", e.value).syncId));
+      if (id === "v8-add-trip-recipes") {
+        const recipeIds = data.getAll("recipe").map((value) => String(value)).filter(Boolean);
+        if (!recipeIds.length) throw new Error("\u8ACB\u81F3\u5C11\u9078\u64C7\u4E00\u9053\u6599\u7406\u3002");
+        return commands.addRecipes(ctx.tripId, recipeIds);
+      }
       if (id === "water-form") return commands.run("add-water", (tx) => {
         const name = normalizeDrinkingWater(text("name")) || "\u98F2\u7528\u6C34", ml = Number(text("ml"));
         if (!Number.isFinite(ml) || ml <= 0) throw new Error("\u8ACB\u8F38\u5165\u5927\u65BC 0 \u7684\u6C34\u91CF");
