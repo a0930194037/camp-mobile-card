@@ -19897,6 +19897,14 @@ var CampV8 = (() => {
 
   // sync-v8/database.js
   addRxPlugin(RxDBLeaderElectionPlugin);
+  if (!globalThis.__campV8DexieNoticeFiltered) {
+    const warn = console.warn.bind(console);
+    console.warn = (...args) => {
+      if (args.some((arg) => typeof arg === "string" && arg.includes("RxDB Open Core RxStorage"))) return;
+      warn(...args);
+    };
+    globalThis.__campV8DexieNoticeFiltered = true;
+  }
   var string = { type: "string" };
   var schema = (properties, required) => ({
     version: 0,
@@ -41956,7 +41964,8 @@ ${suffix}`;
       else if (entity.lifecycle === "cancelled") state.discardedTrips.push({ id: t.id, syncId: entity.id, trip: t, deletedAt: entity.updatedAt });
     }
     for (const entity of entities.values()) if (["deleted", "cancelled"].includes(entity.lifecycle)) state.recycleBin.push({ syncId: entity.id, collection: entity.kind, entity: display(entity) });
-    state.activeTripId = state.trips.find((t) => t.syncId === state.activeTripId)?.id || null;
+    const selected = state.trips.find((t) => t.syncId === state.activeTripId || t.id === state.activeTripId);
+    state.activeTripId = selected?.id || (state.trips.length === 1 ? state.trips[0].id : null);
     return state;
   }
 
