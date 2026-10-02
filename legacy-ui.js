@@ -951,7 +951,10 @@ function decorateTripDetails() {
   const current = trip();
     if (!current) return;
     const details = mapDetails(current);
-    const sub = document.querySelector('.page .sub');
+    // Only the page header may receive trip/map details. A descendant `.sub`
+    // can be the drinking-water explanation, and updating it here caused the
+    // campsite address/contact block to appear underneath that section.
+    const sub = document.querySelector('.page > .sub');
     if (sub) sub.innerHTML = `${tripDateRange(current)}　${esc(current.location || '未填地點')}<br>${tripDurationName(current)} · ${levelText[current.level]}${details ? `<br>${details}` : ''}`;
     const context = document.querySelector('.trip-context');
     if (context) context.innerHTML = `${tripDateRange(current)}　${esc(current.location || '未填地點')}<br>${tripDurationName(current)} · ${levelText[current.level]}　｜　目的：${esc(cardPurpose(current))}${details ? `<br>${details}` : ''}`;
