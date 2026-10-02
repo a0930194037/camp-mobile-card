@@ -1002,10 +1002,15 @@ function sortByUsage(items, counts = gearUsageCounts()) {
 // migrated reason strings and left an over-limit L1 list without suggestions.
 function optionalPackingSuggestions(tripData) {
   const limits = { L1: 16, L2: 28, L3: 40, L4: 54 };
+  const weightLimits = { L1: 12000, L2: 20000, L3: 30000, L4: 45000 };
   const limit = limits[tripData.level] || 28;
+  const weightLimit = weightLimits[tripData.level] || 20000;
   const extraCount = Math.max(0, (tripData.items || []).length - limit);
-  if (!extraCount) return { limit, extraCount: 0, candidates: [] };
-  const counts = gearUsageCounts();
+  const totalWeightGrams = (tripData.items || []).reduce((total, item) => total + (Number(item.weightGrams) || 0), 0);
+  const extraWeightGrams = Math.max(0, totalWeightGrams - weightLimit);
+  const suggestionCount = Math.max(extraCount, extraWeightGrams ? 1 : 0);
+  if (!suggestionCount) return { limit, weightLimit, extraCount: 0, extraWeightGrams: 0, totalWeightGrams, candidates: [] };
+  const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
   const optional = /拍照|咖啡|氣氛|朋友|娛樂|休閒|備用|手動加入/;
   const candidates = [...(tripData.items || [])]
     .sort((left, right) => {
@@ -2079,7 +2084,7 @@ document.addEventListener('click', async event => {
 // trip, so simply opening either page cannot create a sync mutation.
 const gearRowsBeforeUsageRanking = gearRows;
 gearRows = function gearRowsWithUsageRanking(gearRows) {
-  const counts = gearUsageCounts();
+  const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
   return sortByUsage(gearRows, counts).map(gear => {
     const count = usageCount(gear, counts);
     const usage = count ? ` · 常用：已使用 ${count} 次` : ' · 尚無使用紀錄';
@@ -2098,7 +2103,7 @@ renderGear = function renderGearWithUsageRanking() {
 renderLists = function renderListsWithUsageRanking() {
   const currentTrip = trip();
   if (!currentTrip) return noTrip();
-  const counts = gearUsageCounts();
+  const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
   const packGroups = groupItems(sortByUsage(currentTrip.items, counts));
   const shoppingRows = shoppingProgressRows(currentTrip);
   const totalWeightGrams = currentTrip.items.reduce((total, item) => total + (Number(item.weightGrams) || 0), 0);
@@ -2106,7 +2111,7 @@ renderLists = function renderListsWithUsageRanking() {
 };
 
 renderPack = function renderPackWithUsageLabels(groups) {
-  const counts = gearUsageCounts();
+  const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
   return Object.entries(groups).map(([category, items]) => `<div class="section-head"><h2>${esc(category)}</h2><span>${done(items)}/${items.length}</span></div><div class="list">${items.map(item => {
     const count = usageCount(item, counts);
     const source = item.manual ? '手動加入' : item.reason;
