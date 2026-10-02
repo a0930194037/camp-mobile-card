@@ -20624,6 +20624,13 @@ var CampV8 = (() => {
           const gear = tx.entities.get(gearId);
           if (!gear || gear.kind !== "gear" || gear.lifecycle !== "active") throw new Error("\u88DD\u5099\u5DF2\u522A\u9664\uFF0C\u8ACB\u91CD\u65B0\u9078\u64C7");
           const id = stableId("packing", tripId, gearId), existing = tx.entities.get(id);
+          if (existing && existing.lifecycle !== "active") {
+            tx.lifecycle(id, "active");
+            tx.set(id, ["snapshot"], values(gear));
+            tx.set(id, ["manual"], true);
+            tx.set(id, ["checked"], false);
+            continue;
+          }
           if (existing) {
             if (existing.lifecycle !== "active") throw new Error("\u8ACB\u5F9E\u56DE\u6536\u5340\u5FA9\u539F\u5DF2\u79FB\u9664\u7684\u88DD\u5099");
             continue;
@@ -41765,7 +41772,18 @@ ${suffix}`;
         if (child.kind === "packing") {
           const gear = catalogs.get(row.gearId), saved = row.snapshot || {};
           const manual = !!row.manual || !!saved.manual || row.reason === "\u624B\u52D5\u52A0\u5165" || saved.reason === "\u624B\u52D5\u52A0\u5165";
-          const entry = { ...saved, ...row, manual, gearId: gear?.id || saved.id || saved.gearId || row.gearId, gearSyncId: row.gearId, syncId: child.id };
+          const entry = {
+            ...saved,
+            ...row,
+            manual,
+            gearId: gear?.id || saved.id || saved.gearId || row.gearId,
+            gearSyncId: row.gearId,
+            name: gear?.name ?? row.name ?? saved.name,
+            category: gear?.category ?? row.category ?? saved.category,
+            location: gear?.location ?? row.location ?? saved.location,
+            note: gear?.note ?? row.note ?? saved.note,
+            syncId: child.id
+          };
           if (child.lifecycle === "active") {
             t.items.push(entry);
             if (entry.manual) t.overrides.added.push(clone(entry));

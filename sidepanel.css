@@ -11,3 +11,7 @@
 
 /* Internal codes belong in create/edit forms, not in library rows. */
 .gear-row .tag { display:none; }
+
+/* Keep the three per-recipe actions on one visual baseline. */
+.shopping-recipe-actions { align-items:center; min-height:40px; }
+.shopping-recipe-actions .ghost { display:inline-flex; align-items:center; justify-content:center; height:36px; white-space:nowrap; }
