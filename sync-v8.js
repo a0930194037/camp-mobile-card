@@ -42108,15 +42108,33 @@ ${suffix}`;
       context3 = { name: "water", tripId: tripData.syncId, basis: basis() };
       legacy.dialog(`<form id="water-form"><h2>\u65B0\u589E\u7528\u6C34</h2><div class="field"><label>\u7528\u9014</label><input name="name" required value="\u98F2\u7528\u6C34" placeholder="\u4F8B\u5982\uFF1A\u6CE1\u8336\u5099\u7528"></div><div class="field"><label>\u6C34\u91CF\uFF08ml\uFF09</label><input name="ml" type="number" required value="500"></div><div class="actions"><button class="primary">\u52A0\u5165</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
     };
+    const recipeCategory = (recipe) => {
+      const known = { rice: "\u98EF\u985E", noodles: "\u9EB5\u985E", soup: "\u6E6F\u934B", grill: "\u714E\u70E4", snack: "\u8F15\u98DF", drink: "\u98F2\u54C1", other: "\u5176\u4ED6" };
+      if (known[recipe.type]) return known[recipe.type];
+      const name = String(recipe.name || "");
+      if (/咖啡|紅茶|綠茶|奶茶|薑茶|可可|飲/.test(name)) return "\u98F2\u54C1";
+      if (/湯|鍋/.test(name)) return "\u6E6F\u934B";
+      if (/麵|義大利/.test(name)) return "\u9EB5\u985E";
+      if (/吐司|三明治|沙拉|優格|燕麥|飯糰|玉米|地瓜|燒賣|蛋餅/.test(name)) return "\u8F15\u98DF";
+      if (/烤|煎|牛排|雞腿|鮭魚|香腸|燒肉/.test(name)) return "\u714E\u70E4";
+      return "\u98EF\u985E";
+    };
     const openTripRecipeDialog = (tripData) => {
       context3 = { name: "trip-recipes", tripId: tripData.syncId, basis: basis() };
       const selected = new Set(tripData.recipeIds || []);
-      const available = (legacy.state.recipes || []).filter((recipe) => recipe.syncId && !selected.has(recipe.id));
+      const available = (legacy.state.recipes || []).filter((recipe) => recipe.syncId && !selected.has(recipe.id)).map((recipe) => ({ ...recipe, category: recipeCategory(recipe) })).sort((a, b) => a.category.localeCompare(b.category, "zh-Hant") || a.name.localeCompare(b.name, "zh-Hant"));
       if (!available.length) {
         legacy.notify("\u6240\u6709\u53EF\u7528\u6599\u7406\u90FD\u5DF2\u52A0\u5165\u672C\u6B21\u884C\u7A0B\u3002");
         return;
       }
-      legacy.dialog(`<form id="v8-add-trip-recipes"><h2>\u52A0\u5165\u6599\u7406</h2><p class="sub">\u9078\u53D6\u5F8C\u6703\u5EFA\u7ACB\u9019\u6B21\u884C\u7A0B\u5C08\u7528\u7684\u63A1\u8CB7\u5217\uFF1B\u5DF2\u6709\u6599\u7406\u4E0D\u6703\u91CD\u8907\u52A0\u5165\u3002</p><div class="list">${available.map((recipe) => `<label class="item"><input type="checkbox" name="recipe" value="${esc(recipe.syncId)}"><span><span class="item-name">${esc(recipe.name)}</span><span class="reason">${esc(recipe.meal || "\u672A\u5206\u985E")}</span></span></label>`).join("")}</div><div class="actions"><button class="primary">\u52A0\u5165\u6599\u7406</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
+      const categories = [...new Set(available.map((recipe) => recipe.category))];
+      const dialogRoot = legacy.dialog(`<form id="v8-add-trip-recipes"><h2>\u52A0\u5165\u6599\u7406</h2><p class="sub">\u9078\u53D6\u5F8C\u6703\u5EFA\u7ACB\u9019\u6B21\u884C\u7A0B\u5C08\u7528\u7684\u63A1\u8CB7\u5217\uFF1B\u5DF2\u6709\u6599\u7406\u4E0D\u6703\u91CD\u8907\u52A0\u5165\u3002</p><div class="field"><label for="v8-recipe-category">\u5206\u985E</label><select id="v8-recipe-category"><option value="all">\u5168\u90E8\u6599\u7406</option>${categories.map((category) => `<option value="${esc(category)}">${esc(category)}</option>`).join("")}</select></div><div class="list" id="v8-trip-recipe-list">${available.map((recipe) => `<label class="item" data-trip-recipe-option data-category="${esc(recipe.category)}"><input type="checkbox" name="recipe" value="${esc(recipe.syncId)}"><span><span class="item-name">${esc(recipe.name)}</span><span class="reason">${esc(recipe.category)} \xB7 ${esc(recipe.meal || "\u672A\u5206\u985E")}</span></span></label>`).join("")}</div><div class="actions"><button class="primary">\u52A0\u5165\u6599\u7406</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
+      dialogRoot.querySelector("#v8-recipe-category").onchange = (event) => {
+        const category = event.target.value;
+        dialogRoot.querySelectorAll("[data-trip-recipe-option]").forEach((option) => {
+          option.hidden = category !== "all" && option.dataset.category !== category;
+        });
+      };
     };
     const find = (collection, id) => legacy.state[collection].find((e) => e.id === id || e.syncId === id);
     const basis = () => new Map([...displayedEntities].map(([id, e]) => [id, clone(e)]));
