@@ -1674,11 +1674,9 @@ renderShop = function(items) {
     (all[id] ??= { id, name: item.recipeName || '其他採買', meal: item.meal || '', items: [] }).items.push({ ...item, index });
     return all;
   }, {});
-  for (const recipeId of currentTrip?.recipeIds || []) {
-    if (groups[recipeId]) continue;
-    const recipe = state.recipes.find(entry => entry.id === recipeId) || currentTrip.recipeSnapshots?.[recipeId];
-    if (recipe) groups[recipeId] = { id: recipeId, name: recipe.name, meal: currentTrip.recipeMeals?.[recipeId] || '', items: [] };
-  }
+  // Do not render an empty recipe heading. Removing every non-water shopping
+  // row removes that recipe from this checklist without silently mutating the
+  // saved recipe or the trip relation in a background render.
   if (!Object.keys(groups).length) return `<div class="section-head"><h2>採買清單</h2><span>0/0</span></div><p class="sub">尚未選擇料理。</p>`;
   const slotOptions = ['', '早餐', '午餐', '晚餐', '宵夜'];
   return `<div class="section-head"><h2>採買清單</h2><span>${done(items)}/${items.length}</span></div>${Object.values(groups).map(group => {
@@ -1748,11 +1746,7 @@ renderShop = function renderShopWithWaterPlan(items) {
     (all[id] ??= { id, name: item.recipeName || '其他料理', meal: item.meal || '', items: [] }).items.push({ ...item, name: normalizeDrinkingWater(item.name), index });
     return all;
   }, {});
-  for (const recipeId of currentTrip?.recipeIds || []) {
-    if (groups[recipeId]) continue;
-    const recipe = state.recipes.find(entry => entry.id === recipeId) || currentTrip.recipeSnapshots?.[recipeId];
-    if (recipe) groups[recipeId] = { id: recipeId, name: recipe.name, meal: currentTrip.recipeMeals?.[recipeId] || '', items: [] };
-  }
+  // Empty recipe groups stay absent from the rendered checklist.
   const slotOptions = ['', '早餐', '午餐', '晚餐', '宵夜'];
   const content = Object.values(groups).map(group => {
     const modified = !!currentTrip?.recipeModified?.[group.id];
@@ -1781,11 +1775,7 @@ renderShop = function renderShopWithWaterChecks(items) {
     (all[id] ??= { id, name: item.recipeName || '其他料理', meal: item.meal || '', items: [] }).items.push({ ...item, index });
     return all;
   }, {});
-  for (const recipeId of currentTrip?.recipeIds || []) {
-    if (groups[recipeId]) continue;
-    const recipe = state.recipes.find(entry => entry.id === recipeId) || currentTrip.recipeSnapshots?.[recipeId];
-    if (recipe) groups[recipeId] = { id: recipeId, name: recipe.name, meal: currentTrip.recipeMeals?.[recipeId] || '', items: [] };
-  }
+  // Empty recipe groups stay absent from the rendered checklist.
   const slotOptions = ['', '早餐', '午餐', '晚餐', '宵夜'], progress = shoppingProgressRows(currentTrip);
   const content = Object.values(groups).map(group => {
     const modified = !!currentTrip?.recipeModified?.[group.id];
