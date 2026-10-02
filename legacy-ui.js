@@ -1366,7 +1366,13 @@ function recipeLibraryDialog(existing) {
 
 function recordsPage() {
   const logs = state.logs || [];
-  return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? logs.map(log => `<button class="card record-open" data-action="open-archived-log" data-id="${esc(log.syncId || log.id)}"><h3>${esc(log.name)}</h3><p class="meta">${esc(log.date)} · ${esc(log.notes || '未填心得')}</p><span class="reason">查看內容</span></button>`).join('') : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
+  const row = log => {
+    const tripData = log.archivedTrip || log.tripSnapshot || {};
+    const duration = tripData.duration === 'overnight' ? '2 日 1 夜' : tripData.duration === 'day' ? '日歸' : '';
+    const level = tripData.level ? levelText[tripData.level] || tripData.level : '';
+    return `<button class="card record-open archived-trip-row" data-action="open-archived-log" data-id="${esc(log.syncId || log.id)}"><div class="row between"><h3>${esc(log.name || tripData.name)}</h3><span class="tiny">已歸檔</span></div><div class="meta">${esc(log.date || tripData.date || '')} · ${esc(tripData.location || '未填地點')}${duration ? ` · ${duration}` : ''}${level ? ` · ${esc(level)}` : ''}</div><div class="progress"><span style="width:100%"></span></div></button>`;
+  };
+  return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? logs.map(row).join('') : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
 }
 
 function archivedTripPage() {
