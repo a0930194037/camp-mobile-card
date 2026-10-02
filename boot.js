@@ -12,6 +12,17 @@
   let activeOwner=null,repository=null,adapter=null,transport=null,db=null;
   let accountTail=Promise.resolve();
   const message=text=>{document.getElementById('v8-boot-message')?.remove();const el=document.createElement('p');el.id='v8-boot-message';el.className='notice';el.textContent=text;document.querySelector('#app').prepend(el);};
+  // Auth callbacks, browser storage and Realtime all run outside a click
+  // handler. Some SDKs reject with plain objects, which Chrome otherwise
+  // reports only as "Uncaught (in promise) [object Object]". Normalize every
+  // boundary into one visible diagnostic and keep the queue usable.
+  const errorText=error=>{
+    if(error instanceof Error)return error.message||'同步啟動失敗。';
+    if(typeof error==='string')return error;
+    if(error&&typeof error==='object')return String(error.message||error.error_description||error.error||error.details||error.hint||error.code||'同步啟動失敗。');
+    return '同步啟動失敗。';
+  };
+  const reportError=error=>{console.error('[Camp v8]',error);message(errorText(error));};
   function previewLegacy(source){
     // Before activation the server's v7 document is still the authority. Show
     // it read-only instead of replacing it with an empty v8 projection. This
@@ -78,15 +89,15 @@
       const section=root.createElement('section');section.className='sync-settings';
       const info=root.createElement('p');info.textContent=`待送 ${status.pending} 筆；衝突 ${status.conflicts} 筆。${status.error||''}`;section.append(info);
       for(const [label,handler] of [['立即同步',()=>repository.resync()],['已刪除項目',()=>adapter.recycle()],['待恢復操作',()=>adapter.recovery()],['登出同步帳號',()=>client.auth.signOut({scope:'local'})]]){
-        const button=root.createElement('button');button.type='button';button.className='secondary';button.textContent=label;button.onclick=handler;section.append(button);
+        const button=root.createElement('button');button.type='button';button.className='secondary';button.textContent=label;button.onclick=()=>Promise.resolve(handler()).catch(reportError);section.append(button);
       }
       form.append(section);
     }});
-    await repository.start();await adapter.start();await transport.watch(()=>repository.resync());
+    await repository.start();await adapter.start();await transport.watch(()=>Promise.resolve(repository.resync()).catch(reportError));
     if(offlineOnly)message('離線模式：本機操作已保存，恢復網路並完成登入驗證後會自動同步。');
     globalThis.campV8={repository,adapter};
   }
-  function schedule(session){accountTail=accountTail.then(()=>switchAccount(session)).catch(e=>message(CampV8.classifyError(e).message));}
+  function schedule(session){accountTail=accountTail.then(()=>switchAccount(session)).catch(reportError);}
   // No await inside Auth event callbacks (avoids SDK lock deadlocks).
   async function availableLocalSession(session){
     if(session)return session;
@@ -95,6 +106,16 @@
     // This selects an existing account's local database only. It never invents an authenticated network session.
     return cached?.user?.id?{user:{id:cached.user.id},offlineOnly:true}:null;
   }
-  client.auth.onAuthStateChange((event,session)=>{setTimeout(async()=>schedule(event==='SIGNED_OUT'?null:await availableLocalSession(session)),0);});
+  client.auth.onAuthStateChange((event,session)=>{setTimeout(()=>{
+    Promise.resolve(availableLocalSession(session))
+      .then(resolved=>schedule(event==='SIGNED_OUT'?null:resolved))
+      .catch(reportError);
+  },0);});
   const {data:{session}}=await client.auth.getSession();schedule(await availableLocalSession(session));
-})();
+})().catch(error=>{
+  console.error('[Camp v8] boot failed',error);
+  const app=document.querySelector('#app');if(!app)return;
+  const notice=document.createElement('p');notice.id='v8-boot-message';notice.className='notice';
+  notice.textContent=error&&typeof error==='object'?(error.message||error.error_description||error.error||error.details||error.code||'同步啟動失敗。'):(String(error||'同步啟動失敗。'));
+  app.prepend(notice);
+});
