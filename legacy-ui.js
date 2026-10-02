@@ -381,6 +381,7 @@ render = function () {
   }
 
   if (state.page === 'cancelled') return renderCancelledTrips();
+  if (state.page === 'archived-log') return archivedTripPage();
   if (state.page !== 'home') {
     const result = originalRender();
     promoteTripActions();
@@ -1365,7 +1366,26 @@ function recipeLibraryDialog(existing) {
 
 function recordsPage() {
   const logs = state.logs || [];
-  return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? logs.map(log => `<div class="card"><h3>${esc(log.name)}</h3><p class="meta">${esc(log.date)} · ${esc(log.notes || '未填心得')}</p></div>`).join('') : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
+  return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? logs.map(log => `<button class="card record-open" data-action="open-archived-log" data-id="${esc(log.syncId || log.id)}"><h3>${esc(log.name)}</h3><p class="meta">${esc(log.date)} · ${esc(log.notes || '未填心得')}</p><span class="reason">查看內容</span></button>`).join('') : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
+}
+
+function archivedTripPage() {
+  const log = (state.logs || []).find(entry => entry.syncId === state.archivedLogId || entry.id === state.archivedLogId);
+  if (!log) {
+    state.page = 'logs';
+    state.archivedLogId = null;
+    return render();
+  }
+  const tripData = log.archivedTrip || log.tripSnapshot || {};
+  const childRows = log.childrenSnapshot || [];
+  const rows = kind => childRows.filter(row => row.kind === kind).map(row => row.data || {});
+  const items = tripData.items?.length ? tripData.items : rows('packing').map(row => ({ ...row, name: row.name || row.snapshot?.name || '裝備' }));
+  const shopping = tripData.shopping?.length ? tripData.shopping : rows('shopping').filter(row => !row.waterPlan);
+  const recipes = Object.values(tripData.recipeSnapshots || {}).map(recipe => recipe.name).filter(Boolean);
+  const itemRows = items.length ? items.map(item => `<div class="item ${item.checked ? 'checked' : ''}"><span><span class="item-name">${esc(item.name || '裝備')}</span><span class="reason">${esc(item.reason || item.category || '')}</span></span></div>`).join('') : '<p class="sub">未保留裝備清單。</p>';
+  const shoppingRows = shopping.length ? shopping.map(item => `<div class="item ${item.checked ? 'checked' : ''}"><span><span class="item-name">${esc(item.name || '採買項目')}</span><span class="reason">${esc(item.recipeName || '')}</span></span></div>`).join('') : '<p class="sub">未保留採買清單。</p>';
+  document.querySelector('#app').innerHTML = header() + `<section class="page archived-trip-page"><div class="page-heading"><div><p class="eyebrow">已歸檔行程</p><h2 class="title">${esc(log.name || tripData.name || '露營紀錄')}</h2><p class="sub">${esc(log.date || tripData.date || '')}　${esc(tripData.location || '未填地點')}</p></div></div><div class="actions"><button class="secondary" data-action="open-records">返回露營紀錄</button></div><section class="record-detail"><h3>行程資訊</h3><p class="meta">${esc(tripData.duration === 'overnight' ? '2 日 1 夜' : tripData.duration === 'day' ? '日歸' : '')}${tripData.level ? ` · ${esc(levelText[tripData.level] || tripData.level)}` : ''}</p>${recipes.length ? `<p class="meta">今日菜單：${esc(recipes.join('、'))}</p>` : ''}${log.notes ? `<p class="archive-notes">${esc(log.notes)}</p>` : ''}</section><section class="record-detail"><h3>打包清單</h3>${itemRows}</section><section class="record-detail"><h3>採買清單</h3>${shoppingRows}</section></section>` + nav();
+  bind();
 }
 
 function recipesPage() {
@@ -1436,7 +1456,7 @@ function decoratePageWithIllustration() {
   const page = document.querySelector('.page');
   if (!page) return;
   page.classList.toggle('no-trip-page', state.page === 'lists' && !trip());
-  const kind = ({ home: 'tent', trips: 'fire', lists: 'map', gear: 'backpack', recipes: 'pot', logs: 'forest', cancelled: 'forest' })[state.page] || 'forest';
+  const kind = ({ home: 'tent', trips: 'fire', lists: 'map', gear: 'backpack', recipes: 'pot', logs: 'forest', 'archived-log': 'forest', cancelled: 'forest' })[state.page] || 'forest';
   const decoration = document.createElement('span');
   decoration.className = `page-decor decor-${kind}`;
   decoration.setAttribute('aria-hidden', 'true');

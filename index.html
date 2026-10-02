@@ -100,6 +100,12 @@
     .trip-guidance p { color:var(--muted); font-size:11px; line-height:1.55; margin:4px 0; }
     .record-section { margin:18px 0 26px; }
     .record-section > h3 { color:var(--green-deep); font-size:13px; letter-spacing:.06em; margin:0; padding-bottom:7px; border-bottom:1px solid var(--line); }
+    .record-open { display:block; width:100%; text-align:left; }
+    .record-open .reason { margin-top:5px; color:var(--green); font-weight:700; }
+    .record-detail { margin:20px 0; padding-top:12px; border-top:1px solid var(--line); }
+    .record-detail h3 { margin:0 0 8px; color:var(--green-deep); font-size:14px; }
+    .record-detail .item { padding:10px 0; }
+    .archive-notes { margin:12px 0 0; padding:10px 12px; background:var(--mist); color:var(--ink); white-space:pre-wrap; }
     .recipe-library { border-top:1px solid var(--line); padding-top:4px; }
     .nav { grid-template-columns:repeat(4,1fr); }
     .nav button.nav-back { color:var(--muted)!important; background:transparent!important; font-weight:400!important; box-shadow:none!important; }
@@ -111,13 +117,13 @@
     .page-heading .title { margin-bottom:0; }
     .heading-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex:0 0 auto; }
     .heading-actions button { white-space:nowrap; }
-    .page-decor { position:absolute; right:14px; top:10px; width:178px; height:150px; pointer-events:none; opacity:.98; background-image:url('assets/camping-illustrations-v1.png'); background-size:300% 200%; background-repeat:no-repeat; }
+    .page-decor { position:absolute; right:14px; top:10px; width:178px; height:150px; pointer-events:none; opacity:.98; background-size:contain; background-position:center; background-repeat:no-repeat; }
     .decor-tent { background-image:url('assets/moonlight-tent-type3.png'); background-size:contain; background-position:center; }
-    .decor-fire { background-position:50% 0; }
-    .decor-forest { background-position:100% 0; }
+    .decor-fire { background-image:url('assets/campfire-chibi.png'); }
+    .decor-forest { background-image:url('assets/pine-grove-chibi.png'); }
     .decor-backpack { background-image:url('assets/roll-table-low-chair.png'); background-size:contain; background-position:center; }
     .decor-pot { background-image:url('assets/stove-solo-cookset.png'); background-size:contain; background-position:center; }
-    .decor-map { background-position:100% 100%; }
+    .decor-map { background-image:url('assets/camp-map-chibi.png'); }
     .page-decor + .row.between, .page-decor + .eyebrow { padding-right:196px; }
     .page:has(.decor-map) > .title { padding-right:196px; min-height:92px; }
     /* Active trips use the same intentional hero rhythm as Home, Gear and Recipes.

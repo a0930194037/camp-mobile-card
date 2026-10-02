@@ -20861,7 +20861,8 @@ var CampV8 = (() => {
       return this.run("archive-trip", (tx) => {
         const trip = tx.entities.get(tripId);
         if (!trip || trip.lifecycle !== "active") throw new Error("\u884C\u7A0B\u5DF2\u53D6\u6D88");
-        tx.create("log", { tripId, tripSnapshot: values(trip), ...record });
+        const children = [...tx.entities.values()].filter((entity) => entity.parentId === tripId && entity.lifecycle === "active").map((entity) => ({ kind: entity.kind, id: entity.id, data: values(entity) }));
+        tx.create("log", { tripId, tripSnapshot: values(trip), childrenSnapshot: children, ...record });
         tx.lifecycle(tripId, "deleted");
       });
     }
@@ -41961,6 +41962,7 @@ ${suffix}`;
       const data = values(e);
       state.levelDefaults[data.level] = (data.gearIds || []).map((id) => catalogs.get(id)?.id).filter(Boolean);
     }
+    const archivedTripViews = /* @__PURE__ */ new Map();
     for (const entity of byKind("trip")) {
       if (entity.lifecycle === "purged") continue;
       const t = { goals: [], recipeIds: [], recipeMeals: {}, recipeSnapshots: {}, recipeModified: {}, items: [], shopping: [], waterRows: [], overrides: { added: [], removed: [] }, siteAmenities: [], ...display(entity) };
@@ -42027,7 +42029,12 @@ ${suffix}`;
         delete t.recipeModified[id];
       }
       if (entity.lifecycle === "active") state.trips.push(t);
+      else if (entity.lifecycle === "deleted") archivedTripViews.set(entity.id, t);
       else if (entity.lifecycle === "cancelled") state.discardedTrips.push({ id: t.id, syncId: entity.id, trip: t, deletedAt: entity.updatedAt });
+    }
+    for (const log of state.logs) {
+      const archived = archivedTripViews.get(log.tripId);
+      if (archived) log.archivedTrip = archived;
     }
     for (const entity of entities.values()) if (["deleted", "cancelled"].includes(entity.lifecycle)) state.recycleBin.push({ syncId: entity.id, collection: entity.kind, entity: display(entity) });
     const selected = state.trips.find((t) => t.syncId === state.activeTripId || t.id === state.activeTripId);
@@ -42048,7 +42055,11 @@ ${suffix}`;
     const commands = new CampCommands(repository), root = legacy.document || document;
     let context3 = null, lastEntities = /* @__PURE__ */ new Map(), displayedEntities = /* @__PURE__ */ new Map(), status = { pending: 0, conflicts: 0, green: false }, disposed = false;
     const disposers = [];
-    const ui = () => ({ page: legacy.state?.page || "home", pendingPurgeId: legacy.state?.pendingPurgeId });
+    const ui = () => ({
+      page: legacy.state?.page || "home",
+      pendingPurgeId: legacy.state?.pendingPurgeId,
+      archivedLogId: legacy.state?.archivedLogId || null
+    });
     const paint = (entities) => {
       if (disposed) return;
       displayedEntities = new Map([...entities].map(([id, e]) => [id, clone(e)]));
@@ -42266,6 +42277,10 @@ ${suffix}`;
       if (name === "show-trip-list" || name === "back-home") return navigate("home");
       if (name === "show-cancelled-trips") return navigate("cancelled");
       if (name === "open-records") return navigate("logs");
+      if (name === "open-archived-log") {
+        legacy.state.archivedLogId = data.id;
+        return navigate("archived-log");
+      }
       if (name === "open-settings") {
         open("settings");
         onSettings({ root, repository, status });
@@ -42477,7 +42492,7 @@ ${suffix}`;
       if (!form.closest(".dialog")) return;
       consume(event);
       const data = new FormData(form), ctx = context3;
-      run(event.submitter, () => submit(form.id, data, ctx, form), { close: true });
+      run(event.submitter, () => submit(form.id, data, ctx, form), { close: true, page: form.id === "archive-form" ? "home" : null });
     });
     async function submit(id, data, ctx, form) {
       const text = (key) => String(data.get(key) || "").trim();
