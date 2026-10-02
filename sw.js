@@ -1,34 +1,28 @@
-const CACHE = 'camp-mobile-card-v56';
-const APP_FILES = ['./', './index.html', './planner.css', './planner.js', './planner-enhancements.js', './storage-bridge.js', './supabase-js.min.js', './sync-config.js', './sync-engine.js', './sync-extension.js', './manifest.webmanifest', './icon.svg', './assets/camping-illustrations-v1.png', './assets/moonlight-tent-type3.png', './assets/roll-table-low-chair.png', './assets/stove-solo-cookset.png'];
-
-self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));
+/*
+ * Retirement bridge for installations that registered the pre-v8 worker
+ * (`sw.js`). That worker cached the old planner bundle cache-first, so an
+ * installed client could keep rendering old screens after a deployment.
+ *
+ * The current app registers `service-worker.js`. On its next update check,
+ * this bridge removes only the old cache family, unregisters itself, and
+ * reloads open app windows. The fresh page then registers the v8 worker.
+ */
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
 });
 
-self.addEventListener('activate', event => event.waitUntil(
-  caches.keys().then(names => Promise.all(names.filter(name => name !== CACHE).map(name => caches.delete(name))))
-    .then(() => self.clients.claim())
-));
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    const cacheKeys = await caches.keys();
+    await Promise.all(
+      cacheKeys
+        .filter((key) => key.startsWith('camp-mobile-card-'))
+        .map((key) => caches.delete(key)),
+    );
 
-self.addEventListener('fetch', event => {
-  if (event.request.method !== 'GET') return;
-  const updateCache = response => {
-    const copy = response.clone();
-    caches.open(CACHE).then(cache => cache.put(event.request, copy));
-    return response;
-  };
-  // Always check the network for HTML navigations.  This prevents an installed
-  // card from being stuck on an old UI after a GitHub Pages update.
-  if (event.request.mode === 'navigate') {
-    event.respondWith(fetch(event.request).then(updateCache).catch(() => caches.match(event.request).then(cached => cached || caches.match('./'))));
-    return;
-  }
-  // JavaScript must also be network-first: an older cached app.js can be
-  // incompatible with a freshly fetched index.html and leave buttons inert.
-  const isAppCode = /\/(app|planner|planner-enhancements|storage-bridge|supabase-js\.min|sync-config|sync-engine|sync-extension)\.js(?:\?|$)/.test(new URL(event.request.url).pathname);
-  if (isAppCode) {
-    event.respondWith(fetch(event.request).then(updateCache).catch(() => caches.match(event.request)));
-    return;
-  }
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(updateCache)));
+    await self.registration.unregister();
+
+    const clients = await self.clients.matchAll({ type: 'window' });
+    await Promise.all(clients.map((client) => client.navigate(client.url)));
+  })());
 });
