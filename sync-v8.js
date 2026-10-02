@@ -41933,7 +41933,11 @@ ${suffix}`;
     const setSetting = (tx, key, value) => {
       const id = stableId("setting", key);
       if (!tx.entities.has(id)) tx.create("setting", { key, value }, { id });
-      else for (const f2 of flatten(value, ["value"])) tx.set(id, f2.path, f2.value);
+      else {
+        const entity = tx.entities.get(id), rootValue = Object.values(entity.fields || {}).find((field) => JSON.stringify(field.path) === '["value"]');
+        if (rootValue) tx.set(id, ["value"], { ...rootValue.value || {}, ...value });
+        else for (const f2 of flatten(value, ["value"])) tx.set(id, f2.path, f2.value);
+      }
     };
     const editFields = (tx, id, patch) => {
       for (const f2 of flatten(patch)) tx.set(id, f2.path, f2.value);
@@ -42093,6 +42097,15 @@ ${suffix}`;
         consume(event);
         const row = t.shopping[Number(input.dataset.shop)], checked = input.checked;
         run(input, () => commands.check(row.syncId, checked, basis()));
+      } else if (input.matches("[data-water-check]")) {
+        consume(event);
+        const key = input.dataset.waterCheck, checked = input.checked;
+        run(input, () => commands.run("check-water", (tx) => {
+          const tripEntity = tx.entities.get(t.syncId), existing = values(tripEntity).waterOverrides || {}, checks = new Set(existing.checked || []);
+          if (checked) checks.add(key);
+          else checks.delete(key);
+          tx.set(t.syncId, ["waterOverrides"], { ...existing, checked: [...checks] });
+        }));
       } else if (input.matches("[data-recipe-slot]")) {
         consume(event);
         const recipe = find("recipes", input.dataset.recipeSlot), meal = input.value;

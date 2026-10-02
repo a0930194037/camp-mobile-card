@@ -1744,6 +1744,39 @@ renderShop = function renderShopWithWaterPlan(items) {
   return `<div class="section-head"><h2>採買清單</h2><span>${done(items || [])}/${(items || []).length}</span></div>${content || '<p class="sub">尚未選擇料理。</p>'}${renderWaterPlan(currentTrip)}`;
 };
 
+function plannedWaterRows(tripData) {
+  const checked = new Set(tripData?.waterOverrides?.checked || []);
+  return waterRequirements(tripData).map(row => ({ ...row, checked: checked.has(row.key) }));
+}
+function shoppingProgressRows(tripData) {
+  const ingredients = (tripData?.shopping || []).filter(row => !waterAmount(row.name));
+  return [...ingredients, ...plannedWaterRows(tripData)];
+}
+function renderWaterPlanWithChecks(tripData) {
+  const rows = plannedWaterRows(tripData), total = rows.reduce((sum, row) => sum + row.ml, 0);
+  return `<section class="water-plan"><div class="section-head"><h2>建議攜帶飲用水</h2><span>${done(rows)}/${rows.length} · ${total} ml</span></div><p class="sub">包含日常飲食與每道料理所需；野營另計洗手、洗碗用水。</p><div class="list">${rows.map(row => `<label class="item water-row ${row.checked ? 'checked' : ''}"><input type="checkbox" data-water-check="${esc(row.key)}" ${row.checked ? 'checked' : ''}><span style="flex:1"><span class="item-name">${esc(row.name)} ${row.ml}ml</span><span class="reason">${esc(row.reason)}</span></span><button type="button" class="shopping-remove" data-action="remove-water" data-water-key="${esc(row.key)}" aria-label="移除 ${esc(row.name)}">×</button></label>`).join('')}</div><div class="actions water-actions"><button type="button" class="ghost" data-action="add-water">新增用水</button></div></section>`;
+}
+
+renderShop = function renderShopWithWaterChecks(items) {
+  const currentTrip = trip(), groups = (items || []).reduce((all, item, index) => {
+    if (waterAmount(item.name)) return all;
+    const id = item.recipeId || 'other';
+    (all[id] ??= { id, name: item.recipeName || '其他料理', meal: item.meal || '', items: [] }).items.push({ ...item, index });
+    return all;
+  }, {});
+  for (const recipeId of currentTrip?.recipeIds || []) {
+    if (groups[recipeId]) continue;
+    const recipe = state.recipes.find(entry => entry.id === recipeId) || currentTrip.recipeSnapshots?.[recipeId];
+    if (recipe) groups[recipeId] = { id: recipeId, name: recipe.name, meal: currentTrip.recipeMeals?.[recipeId] || '', items: [] };
+  }
+  const slotOptions = ['', '早餐', '午餐', '晚餐', '宵夜'], progress = shoppingProgressRows(currentTrip);
+  const content = Object.values(groups).map(group => {
+    const modified = !!currentTrip?.recipeModified?.[group.id];
+    return `<section class="shopping-recipe"><div class="shopping-recipe-title"><select class="recipe-slot" data-recipe-slot="${esc(group.id)}" aria-label="${esc(group.name)}的用餐時段">${slotOptions.map(slot => `<option value="${slot}" ${group.meal === slot ? 'selected' : ''}>${slot || '未設定'}</option>`).join('')}</select><strong>${esc(group.name)}</strong><em>${done(group.items)}/${group.items.length}</em></div><div class="list">${group.items.map(item => `<div class="item shopping-item ${item.checked ? 'checked' : ''}"><input type="checkbox" data-shop="${item.index}" ${item.checked ? 'checked' : ''}><span class="item-name">${esc(item.name)}</span><button type="button" class="shopping-remove" data-action="remove-shopping" data-index="${item.index}" data-shopping-key="${esc(item.shoppingKey || `recipe:${item.recipeId}:${item.name}`)}" aria-label="移除 ${esc(item.name)}">×</button></div>`).join('')}</div><div class="actions shopping-recipe-actions"><button type="button" class="ghost add-extra-dish" data-action="add-extra-dish" data-recipe-id="${esc(group.id)}">額外加菜</button>${modified ? `<button type="button" class="ghost" data-action="save-modified-recipe" data-recipe-id="${esc(group.id)}">另存料理</button><button type="button" class="ghost" data-action="replace-modified-recipe" data-recipe-id="${esc(group.id)}">取代料理</button>` : ''}</div></section>`;
+  }).join('');
+  return `<div class="section-head"><h2>採買清單</h2><span>${done(progress)}/${progress.length}</span></div>${content || '<p class="sub">尚未選擇料理。</p>'}${renderWaterPlanWithChecks(currentTrip)}`;
+};
+
 const levelPresetFallbacks = {
   L1: ['F04', 'F06', 'F02', 'C01', 'C07', 'T02', 'T04', 'L05', 'L06', 'X01'],
   L2: ['F03', 'F04', 'F06', 'F01', 'C01', 'C07', 'T01', 'T02', 'T04', 'L05', 'L06', 'X01'],
@@ -1885,6 +1918,20 @@ action = async function mobileCardActionHandler(name, data = {}) {
 const mobileCardRender = render;
 render = function renderWithMobileCardControls() {
   mobileCardRender();
+  document.querySelectorAll('button.card[data-action="open-trip"]').forEach(card => {
+    if (card.querySelector('.home-shopping-progress')) return;
+    const tripData = state.trips.find(entry => entry.id === card.dataset.id), rows = shoppingProgressRows(tripData);
+    const packingProgress = card.querySelector('.progress');
+    if (!packingProgress) return;
+    packingProgress.insertAdjacentHTML('afterend', `<p class="home-progress-label home-shopping-progress">採買清單 · 已核銷 ${done(rows)} / ${rows.length}</p><div class="progress home-shopping-progress"><span style="width:${pct(rows)}%"></span></div>`);
+  });
+};
+
+renderLists = function renderListsWithWaterProgress() {
+  const currentTrip = trip();
+  if (!currentTrip) return noTrip();
+  const packGroups = groupItems(currentTrip.items), shoppingRows = shoppingProgressRows(currentTrip);
+  return `<section class="page"><p class="eyebrow">行程清單 · ${currentTrip.code}</p><h2 class="title">${esc(currentTrip.name)}</h2><p class="trip-context">${currentTrip.date}　${esc(currentTrip.location || '未填地點')}<br>${currentTrip.duration === 'overnight' ? '2 日 1 夜' : '日歸'} · ${levelText[currentTrip.level]}　｜　目的：${esc(cardPurpose(currentTrip))}</p><div class="split"><button class="${listTab === 'pack' ? 'primary' : 'secondary'}" data-listtab="pack">帶什麼 ${done(currentTrip.items)}/${currentTrip.items.length}</button><button class="${listTab === 'shop' ? 'primary' : 'secondary'}" data-listtab="shop">買什麼 ${done(shoppingRows)}/${shoppingRows.length}</button></div><div id="list-body">${listTab === 'pack' ? renderPack(packGroups) : renderShop(currentTrip.shopping)}</div></section>`;
 };
 
 // Recalculation is a projection, never a new identity generator. Preserve
