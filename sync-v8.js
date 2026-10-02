@@ -41971,7 +41971,7 @@ ${suffix}`;
           t.waterRows.push({ ...row, syncId: child.id, lifecycle: child.lifecycle });
         } else if (child.kind === "shopping" && child.lifecycle === "active") {
           const recipe = catalogs.get(row.recipeId);
-          t.shopping.push({ ...row, recipeId: recipe?.id || row.legacyRecipeId || row.recipeId || "", syncId: child.id, shoppingRowId: child.id, shoppingKey: child.id });
+          t.shopping.push({ ...row, recipeId: recipe?.id || row.legacyRecipeId || row.recipeId || "", recipeSyncId: row.recipeId || null, syncId: child.id, shoppingRowId: child.id, shoppingKey: child.id });
         }
         if (child.kind === "relation" && child.lifecycle === "active") {
           const recipe = entities.get(row.recipeId)?.lifecycle === "active" ? catalogs.get(row.recipeId) : row.snapshot;
@@ -42126,6 +42126,14 @@ ${suffix}`;
       const relation = recipeRelation(tx, tripId, recipeId);
       if (relation) tx.set(relation.id, ["ingredientModified"], changed);
     };
+    const removeRecipeWhenEmpty = (tx, tripId, recipeId) => {
+      if (!recipeId) return;
+      const hasIngredients = [...tx.entities.values()].some((entity) => entity.parentId === tripId && entity.kind === "shopping" && entity.lifecycle === "active" && !values(entity).waterPlan && values(entity).recipeId === recipeId);
+      if (!hasIngredients) {
+        const relation = recipeRelation(tx, tripId, recipeId);
+        if (relation) tx.lifecycle(relation.id, "deleted");
+      }
+    };
     const setRelationSnapshot = (tx, relation, snapshot) => {
       for (const field of flatten(snapshot, ["snapshot"])) tx.set(relation.id, field.path, field.value);
     };
@@ -42206,6 +42214,12 @@ ${suffix}`;
       if (name === "add-extra-dish") return open("extra", data.recipeId, data.recipeId);
       if (name === "add-water") return openWaterDialog(t);
       if (name === "remove-water") return commands.run("remove-water", (tx) => {
+        const source = data.waterSource && t.shopping.find((row) => row.syncId === data.waterSource);
+        if (source) {
+          tx.lifecycle(source.syncId, "deleted");
+          removeRecipeWhenEmpty(tx, t.syncId, source.recipeSyncId);
+          return;
+        }
         const existing = waterRow(t, data.waterKey);
         if (existing?.manual) return tx.lifecycle(existing.syncId, "deleted");
         if (existing) return tx.set(existing.syncId, ["removed"], true);
@@ -42223,7 +42237,9 @@ ${suffix}`;
             const value = values(entity);
             if (value.recipeId === target.recipeId && waterSignature(value.name) === signature) tx.lifecycle(entity.id, "deleted");
           }
+          const recipeId = target.recipeId || recipe?.syncId;
           if (recipe) markRecipeIngredientsChanged(tx, t.syncId, recipe.syncId);
+          removeRecipeWhenEmpty(tx, t.syncId, recipeId);
         });
       }
       if (name === "toggle-gear-favorite" || name === "toggle-recipe-favorite") {
@@ -42240,6 +42256,7 @@ ${suffix}`;
         return commands.run("remove-shopping", (tx) => {
           tx.lifecycle(row.syncId, "deleted");
           if (recipe) markRecipeIngredientsChanged(tx, t.syncId, recipe.syncId);
+          removeRecipeWhenEmpty(tx, t.syncId, row.recipeSyncId || recipe?.syncId);
         });
       }
       if (name === "save-modified-recipe" || name === "replace-modified-recipe") {
@@ -42283,6 +42300,11 @@ ${suffix}`;
       } else if (input.matches("[data-water-check]")) {
         consume(event);
         const key = input.dataset.waterCheck, checked = input.checked;
+        const source = input.dataset.waterSource && t.shopping.find((row) => row.syncId === input.dataset.waterSource);
+        if (source) {
+          run(input, () => commands.check(source.syncId, checked, basis()));
+          return;
+        }
         run(input, () => commands.run("check-water", (tx) => {
           const existing = waterRow(t, key);
           if (existing) return tx.set(existing.syncId, ["checked"], checked);

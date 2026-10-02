@@ -1713,7 +1713,7 @@ const waterRequirements = tripData => {
     // not recipe ID + amount, is the stable identity for its checklist row.
     const sourceId = row.syncId || row.shoppingRowId || row.shoppingKey || `legacy:${row.recipeId || ''}:${row.name || ''}:${index}`;
     const legacyKey = `recipe:${row.recipeId || ''}:${ml}`;
-    rows.push({ key: `recipe-row:${sourceId}`, legacyKey, name: '料理飲用水', ml, reason: row.recipeName || '料理所需' });
+    rows.push({ key: `recipe-row:${sourceId}`, legacyKey, sourceShoppingId: row.syncId || null, name: '料理飲用水', ml, reason: row.recipeName || '料理所需', checked: !!row.checked });
   }
   if (tripData?.campType === 'wild') {
     rows.push({ key: 'wild-handwash', name: '洗手用水', ml: 1000, reason: '野營無固定洗手設施' });
@@ -1730,7 +1730,8 @@ const waterRequirements = tripData => {
   }
   return rows.map(row => {
     const control = controls.get(row.key) || controls.get(row.legacyKey);
-    return {...row, checked: control?.checked ?? (legacyChecked.has(row.key) || legacyChecked.has(row.legacyKey)), removed: !!control?.removed || legacyRemoved.has(row.key) || legacyRemoved.has(row.legacyKey)};
+    const fallbackChecked = row.sourceShoppingId ? !!row.checked : (legacyChecked.has(row.key) || legacyChecked.has(row.legacyKey));
+    return {...row, checked: control?.checked ?? fallbackChecked, removed: !!control?.removed || legacyRemoved.has(row.key) || legacyRemoved.has(row.legacyKey)};
   }).filter(row => row.ml > 0 && !row.removed);
 };
 const renderWaterPlan = tripData => {
@@ -1765,7 +1766,7 @@ function shoppingProgressRows(tripData) {
 }
 function renderWaterPlanWithChecks(tripData) {
   const rows = plannedWaterRows(tripData), total = rows.reduce((sum, row) => sum + row.ml, 0);
-  return `<section class="water-plan"><div class="section-head"><h2>建議攜帶飲用水</h2><span>${done(rows)}/${rows.length} · ${total} ml</span></div><p class="sub">包含日常飲食與每道料理所需；野營另計洗手、洗碗用水。</p><div class="list">${rows.map(row => `<label class="item water-row ${row.checked ? 'checked' : ''}"><input type="checkbox" data-water-check="${esc(row.key)}" ${row.checked ? 'checked' : ''}><span style="flex:1"><span class="item-name">${esc(row.name)} ${row.ml}ml</span><span class="reason">${esc(row.reason)}</span></span><button type="button" class="shopping-remove" data-action="remove-water" data-water-key="${esc(row.key)}" aria-label="移除 ${esc(row.name)}">×</button></label>`).join('')}</div><div class="actions water-actions"><button type="button" class="ghost" data-action="add-water">新增用水</button></div></section>`;
+  return `<section class="water-plan"><div class="section-head"><h2>建議攜帶飲用水</h2><span>${done(rows)}/${rows.length} · ${total} ml</span></div><p class="sub">包含日常飲食與每道料理所需；野營另計洗手、洗碗用水。</p><div class="list">${rows.map(row => `<label class="item water-row ${row.checked ? 'checked' : ''}"><input type="checkbox" data-water-check="${esc(row.key)}" data-water-source="${esc(row.sourceShoppingId || '')}" ${row.checked ? 'checked' : ''}><span style="flex:1"><span class="item-name">${esc(row.name)} ${row.ml}ml</span><span class="reason">${esc(row.reason)}</span></span><button type="button" class="shopping-remove" data-action="remove-water" data-water-key="${esc(row.key)}" data-water-source="${esc(row.sourceShoppingId || '')}" aria-label="移除 ${esc(row.name)}">×</button></label>`).join('')}</div><div class="actions water-actions"><button type="button" class="ghost" data-action="add-water">新增用水</button></div></section>`;
 }
 
 renderShop = function renderShopWithWaterChecks(items) {
