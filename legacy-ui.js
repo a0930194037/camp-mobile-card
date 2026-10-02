@@ -1701,7 +1701,12 @@ const waterDays = tripData => {
   return Number.isFinite(start) && Number.isFinite(end) && end >= start ? Math.round((end - start) / 86400000) + 1 : 2;
 };
 const waterRequirements = tripData => {
-  const overrides = tripData?.waterOverrides || {}, removed = new Set(overrides.removed || []);
+  // v8 water controls are normal child checklist rows. Unlike the former
+  // trip-wide object, a click here has its own revision and cannot overwrite
+  // another water row (or be overwritten by one arriving from another device).
+  const overrides = tripData?.waterOverrides || {};
+  const legacyRemoved = new Set(overrides.removed || []), legacyChecked = new Set(overrides.checked || []);
+  const controls = new Map((tripData?.waterRows || []).filter(row => row.lifecycle === 'active').map(row => [row.waterKey, row]));
   const days = waterDays(tripData), rows = [{ key: 'drinking', name: '日常飲用水', ml: days * 2000, reason: `每人 ${days} 天飲用` }];
   const seenRecipeWater = new Set();
   for (const row of tripData?.shopping || []) {
@@ -1715,8 +1720,19 @@ const waterRequirements = tripData => {
     rows.push({ key: 'wild-handwash', name: '洗手用水', ml: 1000, reason: '野營無固定洗手設施' });
     rows.push({ key: 'wild-dishes', name: '洗碗用水', ml: 2000, reason: '野營清洗餐具' });
   }
-  for (const row of overrides.added || []) rows.push({ key: `manual:${row.id}`, name: row.name || '自訂飲用水', ml: Number(row.ml) || 0, reason: '手動新增' });
-  return rows.filter(row => row.ml > 0 && !removed.has(row.key));
+  // Keep historic v7 additions visible until the user changes them; new
+  // additions are individual shopping/water child entities below.
+  for (const row of overrides.added || []) {
+    const key = `manual:${row.id}`;
+    if (!controls.get(key)?.manual) rows.push({ key, name: row.name || '自訂飲用水', ml: Number(row.ml) || 0, reason: '手動新增' });
+  }
+  for (const row of controls.values()) {
+    if (row.manual) rows.push({ key: row.waterKey, name: row.name || '自訂飲用水', ml: Number(row.ml) || 0, reason: row.reason || '手動新增' });
+  }
+  return rows.map(row => {
+    const control = controls.get(row.key);
+    return {...row, checked: control?.checked ?? legacyChecked.has(row.key), removed: !!control?.removed || legacyRemoved.has(row.key)};
+  }).filter(row => row.ml > 0 && !row.removed);
 };
 const renderWaterPlan = tripData => {
   const rows = waterRequirements(tripData), total = rows.reduce((sum, row) => sum + row.ml, 0);
@@ -1746,8 +1762,7 @@ renderShop = function renderShopWithWaterPlan(items) {
 };
 
 function plannedWaterRows(tripData) {
-  const checked = new Set(tripData?.waterOverrides?.checked || []);
-  return waterRequirements(tripData).map(row => ({ ...row, checked: checked.has(row.key) }));
+  return waterRequirements(tripData);
 }
 function shoppingProgressRows(tripData) {
   const ingredients = (tripData?.shopping || []).filter(row => !waterAmount(row.name));

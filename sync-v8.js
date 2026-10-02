@@ -41935,9 +41935,10 @@ ${suffix}`;
     }
     for (const entity of byKind("trip")) {
       if (entity.lifecycle === "purged") continue;
-      const t = { goals: [], recipeIds: [], recipeMeals: {}, recipeSnapshots: {}, recipeModified: {}, items: [], shopping: [], overrides: { added: [], removed: [] }, siteAmenities: [], ...display(entity) };
+      const t = { goals: [], recipeIds: [], recipeMeals: {}, recipeSnapshots: {}, recipeModified: {}, items: [], shopping: [], waterRows: [], overrides: { added: [], removed: [] }, siteAmenities: [], ...display(entity) };
       t.items = [];
       t.shopping = [];
+      t.waterRows = [];
       t.recipeIds = [];
       t.recipeMeals = {};
       t.recipeSnapshots = {};
@@ -41966,7 +41967,9 @@ ${suffix}`;
             if (entry.manual) t.overrides.added.push(clone(entry));
           } else t.overrides.removed.push(entry.gearId);
         }
-        if (child.kind === "shopping" && child.lifecycle === "active") {
+        if (child.kind === "shopping" && row.waterPlan) {
+          t.waterRows.push({ ...row, syncId: child.id, lifecycle: child.lifecycle });
+        } else if (child.kind === "shopping" && child.lifecycle === "active") {
           const recipe = catalogs.get(row.recipeId);
           t.shopping.push({ ...row, recipeId: recipe?.id || row.legacyRecipeId || row.recipeId || "", syncId: child.id, shoppingRowId: child.id, shoppingKey: child.id });
         }
@@ -42063,6 +42066,8 @@ ${suffix}`;
       light.onclick = (e) => e.preventDefault();
     }
     const currentTrip = () => legacy.state.trips.find((t) => t.id === legacy.state.activeTripId);
+    const waterRow = (tripData, key) => (tripData?.waterRows || []).find((row) => row.waterKey === key && row.lifecycle === "active");
+    const waterControlId = (tripId, key) => stableId("water-row", tripId, key);
     const openWaterDialog = (tripData) => {
       context3 = { name: "water", tripId: tripData.syncId, basis: basis() };
       legacy.dialog(`<form id="water-form"><h2>\u65B0\u589E\u7528\u6C34</h2><div class="field"><label>\u7528\u9014</label><input name="name" required value="\u98F2\u7528\u6C34" placeholder="\u4F8B\u5982\uFF1A\u6CE1\u8336\u5099\u7528"></div><div class="field"><label>\u6C34\u91CF\uFF08ml\uFF09</label><input name="ml" type="number" required value="500"></div><div class="actions"><button class="primary">\u52A0\u5165</button><button type="button" class="secondary" data-v8-close>\u53D6\u6D88</button></div></form>`);
@@ -42201,10 +42206,14 @@ ${suffix}`;
       if (name === "add-extra-dish") return open("extra", data.recipeId, data.recipeId);
       if (name === "add-water") return openWaterDialog(t);
       if (name === "remove-water") return commands.run("remove-water", (tx) => {
-        const tripEntity = tx.entities.get(t.syncId), existing = values(tripEntity).waterOverrides || {};
-        const removed = new Set(existing.removed || []);
-        removed.add(data.waterKey);
-        tx.set(t.syncId, ["waterOverrides", "removed"], [...removed]);
+        const existing = waterRow(t, data.waterKey);
+        if (existing?.manual) return tx.lifecycle(existing.syncId, "deleted");
+        if (existing) return tx.set(existing.syncId, ["removed"], true);
+        tx.create(
+          "shopping",
+          { waterPlan: true, waterKey: data.waterKey, checked: false, removed: true },
+          { id: waterControlId(t.syncId, data.waterKey), parentId: t.syncId }
+        );
       });
       if (name === "remove-shopping") {
         const row = t.shopping.find((r) => r.shoppingKey === data.shoppingKey) || t.shopping[Number(data.index)], signature = waterSignature(row?.name);
@@ -42275,10 +42284,13 @@ ${suffix}`;
         consume(event);
         const key = input.dataset.waterCheck, checked = input.checked;
         run(input, () => commands.run("check-water", (tx) => {
-          const tripEntity = tx.entities.get(t.syncId), existing = values(tripEntity).waterOverrides || {}, checks = new Set(existing.checked || []);
-          if (checked) checks.add(key);
-          else checks.delete(key);
-          tx.set(t.syncId, ["waterOverrides", "checked"], [...checks]);
+          const existing = waterRow(t, key);
+          if (existing) return tx.set(existing.syncId, ["checked"], checked);
+          tx.create(
+            "shopping",
+            { waterPlan: true, waterKey: key, checked, removed: false },
+            { id: waterControlId(t.syncId, key), parentId: t.syncId }
+          );
         }));
       } else if (input.matches("[data-recipe-slot]")) {
         consume(event);
@@ -42368,10 +42380,14 @@ ${suffix}`;
       const text = (key) => String(data.get(key) || "").trim();
       if (id === "manual-add-form") return commands.addPacking(ctx.tripId, [...form.querySelectorAll("input:checked")].map((e) => find("gear", e.value).syncId));
       if (id === "water-form") return commands.run("add-water", (tx) => {
-        const tripEntity = tx.entities.get(ctx.tripId), existing = values(tripEntity).waterOverrides || {};
         const name = normalizeDrinkingWater(text("name")) || "\u98F2\u7528\u6C34", ml = Number(text("ml"));
         if (!Number.isFinite(ml) || ml <= 0) throw new Error("\u8ACB\u8F38\u5165\u5927\u65BC 0 \u7684\u6C34\u91CF");
-        tx.set(ctx.tripId, ["waterOverrides", "added"], [...existing.added || [], { id: newId(), name, ml }]);
+        const id2 = newId();
+        tx.create(
+          "shopping",
+          { waterPlan: true, manual: true, waterKey: `manual:${id2}`, name, ml, reason: "\u624B\u52D5\u65B0\u589E", checked: false },
+          { id: id2, parentId: ctx.tripId }
+        );
       });
       if (id === "gear-form" || id === "recipe-form") {
         const kind = id === "gear-form" ? "gear" : "recipe";
