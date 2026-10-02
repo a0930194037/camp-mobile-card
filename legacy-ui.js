@@ -1196,10 +1196,17 @@ function decorateTripDetails() {
       context.textAlign = 'left';
       const finish = () => canvas.toBlob(resolve, 'image/png');
       // Use the same location-map illustration that appears in the side panel.
-      // It is drawn after layout because it occupies only the reserved right hero space.
+      // Keep the generated artwork's own aspect ratio.  Drawing it into the old
+      // 298 × 250 rectangle squeezed the 3:2 map horizontally on exported cards.
       const mapIllustration = new Image();
       mapIllustration.onload = () => {
-        context.drawImage(mapIllustration, 718, 54, 298, 250);
+        const heroBox = { x: 704, y: 48, width: 326, height: 252 };
+        const scale = Math.min(heroBox.width / mapIllustration.naturalWidth, heroBox.height / mapIllustration.naturalHeight);
+        const illustrationWidth = Math.round(mapIllustration.naturalWidth * scale);
+        const illustrationHeight = Math.round(mapIllustration.naturalHeight * scale);
+        const illustrationX = heroBox.x + Math.round((heroBox.width - illustrationWidth) / 2);
+        const illustrationY = heroBox.y + Math.round((heroBox.height - illustrationHeight) / 2);
+        context.drawImage(mapIllustration, illustrationX, illustrationY, illustrationWidth, illustrationHeight);
         finish();
       };
       mapIllustration.onerror = finish;
