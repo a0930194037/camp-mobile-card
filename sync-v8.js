@@ -6487,6 +6487,8 @@ var CampV8 = (() => {
       return Object.entries(value).flatMap(([key, v]) => flatten(v, [...path, key]));
     return [{ path, value: clone(value) }];
   }
+  var startsWithPath = (path, prefix) => prefix.length <= path.length && prefix.every((part, index) => path[index] === part);
+  var isPlainObject = (value) => value && typeof value === "object" && !Array.isArray(value);
   function overlay(entities, command) {
     for (const op of command.operations) {
       let e = entities.get(op.entityId);
@@ -6555,6 +6557,28 @@ var CampV8 = (() => {
       if (!e || e.lifecycle !== "active") throw new Error("\u4E0D\u80FD\u7DE8\u8F2F\u5DF2\u522A\u9664\u6216\u53D6\u6D88\u7684\u8CC7\u6599");
       const parent = e.parentId ? this.entities.get(e.parentId) : null;
       if (parent && parent.lifecycle !== "active") throw new Error("\u4E0D\u80FD\u7DE8\u8F2F\u5DF2\u53D6\u6D88\u884C\u7A0B\u7684\u6E05\u55AE");
+      const fields = Object.values(e.fields || {});
+      const ancestor = fields.filter((candidate) => candidate.path.length < path.length && startsWithPath(path, candidate.path)).sort((left, right) => right.path.length - left.path.length)[0];
+      if (ancestor) {
+        const merged = isPlainObject(ancestor.value) ? clone(ancestor.value) : /* @__PURE__ */ Object.create(null);
+        setPath(merged, path.slice(ancestor.path.length), value, deleted);
+        return this.set(id, ancestor.path, merged);
+      }
+      const descendants = fields.filter((candidate) => candidate.path.length > path.length && startsWithPath(candidate.path, path));
+      if (descendants.length) {
+        if (deleted || isPlainObject(value) && Object.keys(value).length === 0) {
+          for (const descendant of descendants) this.set(id, descendant.path, null, true);
+          return;
+        }
+        if (isPlainObject(value)) {
+          const nextLeaves = new Map(flatten(value, path).map((entry) => [fieldKey(entry.path), entry]));
+          for (const descendant of descendants) {
+            if (!nextLeaves.has(fieldKey(descendant.path))) this.set(id, descendant.path, null, true);
+          }
+          for (const entry of nextLeaves.values()) this.set(id, entry.path, entry.value);
+          return;
+        }
+      }
       const field = fieldAt(e, path);
       this.dependency(field?.commandId);
       this.dependency(e.lifeCommand);
@@ -20442,35 +20466,55 @@ var CampV8 = (() => {
   // sync-v8/replication.js
   var pathStartsWith = (path, prefix) => prefix.length <= path.length && prefix.every((part, index) => path[index] === part);
   var samePath = (left, right) => left.length === right.length && pathStartsWith(left, right);
-  function normalizeLegacySettingPaths(command, entities) {
+  function normalizeCommandFieldPaths(command, entities) {
     const next = clone(command), rewritten = [];
+    const layouts = new Map([...entities].map(([id, entity]) => [id, Object.values(entity.fields || {}).map(clone)]));
+    const remember = (operation) => {
+      if (!["set", "deleteField"].includes(operation.type)) return;
+      const fields = layouts.get(operation.entityId) || [];
+      const index = fields.findIndex((field2) => samePath(field2.path, operation.path));
+      const field = { path: clone(operation.path), value: clone(operation.value), deleted: operation.type === "deleteField", revision: operation.baseRevision, commandId: operation.afterCommandId };
+      if (index >= 0) fields[index] = field;
+      else fields.push(field);
+      layouts.set(operation.entityId, fields);
+    };
+    const append = (operation) => {
+      rewritten.push(operation);
+      remember(operation);
+    };
     for (const operation of next.operations) {
+      if (operation.type === "create") {
+        layouts.set(operation.entityId, []);
+        append(operation);
+        continue;
+      }
       if (!["set", "deleteField"].includes(operation.type)) {
-        rewritten.push(operation);
+        append(operation);
         continue;
       }
-      const entity = entities.get(operation.entityId);
-      if (!entity) {
-        rewritten.push(operation);
-        continue;
-      }
-      const fields = Object.values(entity.fields || {});
+      const fields = layouts.get(operation.entityId) || [];
       const ancestor = fields.filter((field) => field.path.length < operation.path.length && pathStartsWith(operation.path, field.path)).sort((left, right) => right.path.length - left.path.length)[0];
       if (ancestor) {
         const value = clone(ancestor.value || {}), suffix = operation.path.slice(ancestor.path.length);
         setPath(value, suffix, operation.value, operation.type === "deleteField");
-        rewritten.push({ ...operation, type: "set", path: ancestor.path, value, baseRevision: ancestor.revision, afterCommandId: ancestor.commandId });
+        append({ ...operation, type: "set", path: ancestor.path, value, baseRevision: ancestor.revision, afterCommandId: ancestor.commandId });
         continue;
       }
       const descendants = fields.filter((field) => field.path.length > operation.path.length && pathStartsWith(field.path, operation.path));
-      if (descendants.length && operation.type === "set" && operation.value && typeof operation.value === "object" && !Array.isArray(operation.value)) {
+      if (descendants.length && (operation.type === "deleteField" || operation.value && typeof operation.value === "object" && !Array.isArray(operation.value))) {
+        if (operation.type === "deleteField" || Object.keys(operation.value).length === 0) {
+          for (const descendant of descendants) append({ ...operation, type: "deleteField", path: descendant.path, value: null, baseRevision: descendant.revision, afterCommandId: descendant.commandId });
+          continue;
+        }
+        const leaves = new Map(flatten(operation.value, operation.path).map((field) => [JSON.stringify(field.path), field]));
+        for (const descendant of descendants) if (!leaves.has(JSON.stringify(descendant.path))) append({ ...operation, type: "deleteField", path: descendant.path, value: null, baseRevision: descendant.revision, afterCommandId: descendant.commandId });
         for (const field of flatten(operation.value, operation.path)) {
           const current = fields.find((candidate) => samePath(candidate.path, field.path));
-          rewritten.push({ ...operation, path: field.path, value: field.value, baseRevision: current?.revision || 0, afterCommandId: current?.commandId || null });
+          append({ ...operation, path: field.path, value: field.value, baseRevision: current?.revision || 0, afterCommandId: current?.commandId || null });
         }
         continue;
       }
-      rewritten.push(operation);
+      append(operation);
     }
     const unique2 = /* @__PURE__ */ new Map();
     for (const operation of rewritten) {
@@ -20480,10 +20524,6 @@ var CampV8 = (() => {
     next.operations = [...unique2.values()];
     return next;
   }
-  var isLegacySettingsCommand = (command, entities) => command.operations.length > 0 && command.operations.every((operation) => {
-    if (operation.type === "create") return operation.kind === "setting";
-    return entities.get(operation.entityId)?.kind === "setting";
-  });
   var CampRepository = class {
     constructor({ db, deviceId, transport, onStatus = () => {
     }, onChange = () => {
@@ -20525,7 +20565,7 @@ var CampV8 = (() => {
           }));
           const outgoing = [];
           for (const doc of pending) {
-            const command = normalizeLegacySettingPaths(JSON.parse(doc.request), entities), request = JSON.stringify(command);
+            const command = normalizeCommandFieldPaths(JSON.parse(doc.request), entities), request = JSON.stringify(command);
             if (request !== doc.request) {
               const stored = await this.db.commands.findOne(doc.id).exec();
               await stored?.incrementalPatch({ request });
@@ -20540,7 +20580,7 @@ var CampV8 = (() => {
               if (reply.length !== 1) throw new Error("server did not acknowledge operation");
               results.push(reply[0]);
             } catch (error) {
-              if (!String(error?.message || "").includes("overlapping_field_path") || !isLegacySettingsCommand(entry.command, entities)) throw error;
+              if (!String(error?.message || "").includes("overlapping_field_path")) throw error;
               results.push({ id: entry.doc.id, status: "conflict", cursor: 0, reason: "overlapping_field_path" });
             }
           }
@@ -20683,7 +20723,7 @@ var CampV8 = (() => {
       return this.run("setting", (tx) => {
         const id = stableId("setting", key);
         if (!tx.entities.has(id)) tx.create("setting", { key, value }, { id });
-        else for (const field of flatten(value, ["value"])) tx.set(id, field.path, field.value);
+        else tx.set(id, ["value"], { ...values(tx.entities.get(id)).value || {}, ...value });
       });
     }
     addPacking(tripId, gearIds) {
@@ -29750,7 +29790,7 @@ Suggested solution: ${env.workaround}`;
     if (customFetch) return (...args) => customFetch(...args);
     return (...args) => fetch(...args);
   };
-  var isPlainObject = (value) => {
+  var isPlainObject2 = (value) => {
     if (typeof value !== "object" || value === null) return false;
     const prototype = Object.getPrototypeOf(value);
     return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(Symbol.toStringTag in value) && !(Symbol.iterator in value);
@@ -29807,7 +29847,7 @@ Suggested solution: ${env.workaround}`;
       headers: (options === null || options === void 0 ? void 0 : options.headers) || {}
     };
     if (method === "GET" || method === "HEAD" || !body) return _objectSpread22(_objectSpread22({}, params), parameters);
-    if (isPlainObject(body)) {
+    if (isPlainObject2(body)) {
       var _contentType;
       const headers = (options === null || options === void 0 ? void 0 : options.headers) || {};
       let contentType;
@@ -42001,11 +42041,7 @@ ${suffix}`;
     const setSetting = (tx, key, value) => {
       const id = stableId("setting", key);
       if (!tx.entities.has(id)) tx.create("setting", { key, value }, { id });
-      else {
-        const entity = tx.entities.get(id), rootValue = Object.values(entity.fields || {}).find((field) => JSON.stringify(field.path) === '["value"]');
-        if (rootValue) tx.set(id, ["value"], { ...rootValue.value || {}, ...value });
-        else for (const f2 of flatten(value, ["value"])) tx.set(id, f2.path, f2.value);
-      }
+      else tx.set(id, ["value"], { ...values(tx.entities.get(id)).value || {}, ...value });
     };
     const editFields = (tx, id, patch) => {
       for (const f2 of flatten(patch)) tx.set(id, f2.path, f2.value);
