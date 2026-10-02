@@ -1011,10 +1011,11 @@ function optionalPackingSuggestions(tripData) {
   const suggestionCount = Math.max(extraCount, extraWeightGrams ? 1 : 0);
   if (!suggestionCount) return { limit, weightLimit, extraCount: 0, extraWeightGrams: 0, totalWeightGrams, candidates: [] };
   const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
+  const countFor = item => counts.get(item.gearSyncId || item.syncId || item.gearId || item.id) || 0;
   const optional = /拍照|咖啡|氣氛|朋友|娛樂|休閒|備用|手動加入/;
   const candidates = [...(tripData.items || [])]
     .sort((left, right) => {
-      const leftUsage = usageCount(left, counts), rightUsage = usageCount(right, counts);
+      const leftUsage = countFor(left), rightUsage = countFor(right);
       const leftOptional = optional.test(left.reason || '') || left.manual;
       const rightOptional = optional.test(right.reason || '') || right.manual;
       return leftUsage - rightUsage || Number(rightOptional) - Number(leftOptional)
@@ -1022,7 +1023,7 @@ function optionalPackingSuggestions(tripData) {
         || String(left.name || '').localeCompare(String(right.name || ''), 'zh-Hant');
     })
     .slice(0, Math.min(suggestionCount, 5))
-    .map(item => ({ ...item, usage: usageCount(item, counts) }));
+    .map(item => ({ ...item, usage: countFor(item) }));
   return { limit, weightLimit, extraCount, extraWeightGrams, totalWeightGrams, candidates };
 }
 
@@ -2085,8 +2086,12 @@ document.addEventListener('click', async event => {
 const gearRowsBeforeUsageRanking = gearRows;
 gearRows = function gearRowsWithUsageRanking(gearRows) {
   const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
-  return sortByUsage(gearRows, counts).map(gear => {
-    const count = usageCount(gear, counts);
+  const countFor = gear => counts.get(gear.gearSyncId || gear.syncId || gear.gearId || gear.id) || 0;
+  const ranked = typeof sortByUsage === 'function' ? sortByUsage(gearRows, counts) : [...gearRows].sort((left, right) =>
+    countFor(right) - countFor(left) || Number(!!right.favorite) - Number(!!left.favorite)
+    || String(left.name || '').localeCompare(String(right.name || ''), 'zh-Hant'));
+  return ranked.map(gear => {
+    const count = countFor(gear);
     const usage = count ? ` · 常用：已使用 ${count} 次` : ' · 尚無使用紀錄';
     const sizeLabel = ({ xs: '極小', small: '小型', medium: '中型', large: '大型', xl: '特大型' })[gear.size] || '未填尺寸';
     const specs = [sizeLabel, gear.dimensions, gear.weightGrams ? `${gear.weightGrams} g` : '未填重量'].filter(Boolean).join(' · ');
@@ -2104,7 +2109,10 @@ renderLists = function renderListsWithUsageRanking() {
   const currentTrip = trip();
   if (!currentTrip) return noTrip();
   const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
-  const packGroups = groupItems(sortByUsage(currentTrip.items, counts));
+  const countFor = item => counts.get(item.gearSyncId || item.syncId || item.gearId || item.id) || 0;
+  const rankedItems = [...currentTrip.items].sort((left, right) =>
+    countFor(right) - countFor(left) || String(left.name || '').localeCompare(String(right.name || ''), 'zh-Hant'));
+  const packGroups = groupItems(rankedItems);
   const shoppingRows = shoppingProgressRows(currentTrip);
   const totalWeightGrams = currentTrip.items.reduce((total, item) => total + (Number(item.weightGrams) || 0), 0);
   return `<section class="page"><p class="eyebrow">行程清單 · ${currentTrip.code}</p><h2 class="title">${esc(currentTrip.name)}</h2><p class="trip-context">${currentTrip.date}　${esc(currentTrip.location || '未填地點')}<br>${currentTrip.duration === 'overnight' ? '2 日 1 夜' : '日歸'} · ${levelText[currentTrip.level]}　｜　目的：${esc(cardPurpose(currentTrip))}</p><div class="split"><button class="${listTab === 'pack' ? 'primary' : 'secondary'}" data-listtab="pack">帶什麼 ${done(currentTrip.items)}/${currentTrip.items.length}</button><button class="${listTab === 'shop' ? 'primary' : 'secondary'}" data-listtab="shop">買什麼 ${done(shoppingRows)}/${shoppingRows.length}</button></div><p class="sub packing-weight">裝備預估負重：${(totalWeightGrams / 1000).toFixed(2)} 公斤</p><div id="list-body">${listTab === 'pack' ? renderPack(packGroups) : renderShop(currentTrip.shopping)}</div></section>`;
@@ -2112,8 +2120,9 @@ renderLists = function renderListsWithUsageRanking() {
 
 renderPack = function renderPackWithUsageLabels(groups) {
   const counts = typeof gearUsageCounts === 'function' ? gearUsageCounts() : new Map();
+  const countFor = item => counts.get(item.gearSyncId || item.syncId || item.gearId || item.id) || 0;
   return Object.entries(groups).map(([category, items]) => `<div class="section-head"><h2>${esc(category)}</h2><span>${done(items)}/${items.length}</span></div><div class="list">${items.map(item => {
-    const count = usageCount(item, counts);
+    const count = countFor(item);
     const source = item.manual ? '手動加入' : item.reason;
     const usage = count ? ` · 常用：${count} 次` : ' · 尚無使用紀錄';
     return `<div class="item ${item.checked ? 'checked' : ''}"><input aria-label="${esc(item.name)}" type="checkbox" data-pack="${item.gearId}" ${item.checked ? 'checked' : ''}><span style="flex:1"><span class="item-name">${esc(item.name)}</span><span class="reason">${esc(source)}${usage}</span></span><button class="ghost" aria-label="從本次清單移除 ${esc(item.name)}" data-action="remove-from-trip" data-id="${item.gearId}">×</button></div>`;
