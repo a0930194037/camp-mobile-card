@@ -42204,7 +42204,7 @@ ${suffix}`;
         const tripEntity = tx.entities.get(t.syncId), existing = values(tripEntity).waterOverrides || {};
         const removed = new Set(existing.removed || []);
         removed.add(data.waterKey);
-        tx.set(t.syncId, ["waterOverrides"], { ...existing, removed: [...removed] });
+        tx.set(t.syncId, ["waterOverrides", "removed"], [...removed]);
       });
       if (name === "remove-shopping") {
         const row = t.shopping.find((r) => r.shoppingKey === data.shoppingKey) || t.shopping[Number(data.index)], signature = waterSignature(row?.name);
@@ -42278,7 +42278,7 @@ ${suffix}`;
           const tripEntity = tx.entities.get(t.syncId), existing = values(tripEntity).waterOverrides || {}, checks = new Set(existing.checked || []);
           if (checked) checks.add(key);
           else checks.delete(key);
-          tx.set(t.syncId, ["waterOverrides"], { ...existing, checked: [...checks] });
+          tx.set(t.syncId, ["waterOverrides", "checked"], [...checks]);
         }));
       } else if (input.matches("[data-recipe-slot]")) {
         consume(event);
@@ -42371,7 +42371,7 @@ ${suffix}`;
         const tripEntity = tx.entities.get(ctx.tripId), existing = values(tripEntity).waterOverrides || {};
         const name = normalizeDrinkingWater(text("name")) || "\u98F2\u7528\u6C34", ml = Number(text("ml"));
         if (!Number.isFinite(ml) || ml <= 0) throw new Error("\u8ACB\u8F38\u5165\u5927\u65BC 0 \u7684\u6C34\u91CF");
-        tx.set(ctx.tripId, ["waterOverrides"], { ...existing, added: [...existing.added || [], { id: newId(), name, ml }] });
+        tx.set(ctx.tripId, ["waterOverrides", "added"], [...existing.added || [], { id: newId(), name, ml }]);
       });
       if (id === "gear-form" || id === "recipe-form") {
         const kind = id === "gear-form" ? "gear" : "recipe";

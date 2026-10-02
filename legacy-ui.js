@@ -251,8 +251,8 @@ function decorateTripDates() {
   if (!['trips', 'lists'].includes(state.page)) return;
   const active = trip();
   if (!active) return;
-  const sub = document.querySelector('.page .sub');
-  if (sub) sub.innerHTML = `${dateRange(active)}　${esc(active.location || '未填地點')}<br>${durationName(active)} · ${levelText[active.level]}`;
+  // The list page has several `.sub` elements (including the water-plan
+  // explanation). Trip metadata belongs only in the dedicated header node.
   const context = document.querySelector('.trip-context');
   if (context) context.innerHTML = `${dateRange(active)}　${esc(active.location || '未填地點')}<br>${durationName(active)} · ${levelText[active.level]}　｜　目的：${esc(cardPurpose(active))}`;
 }
@@ -954,8 +954,6 @@ function decorateTripDetails() {
     // Only the page header may receive trip/map details. A descendant `.sub`
     // can be the drinking-water explanation, and updating it here caused the
     // campsite address/contact block to appear underneath that section.
-    const sub = document.querySelector('.page > .sub');
-    if (sub) sub.innerHTML = `${tripDateRange(current)}　${esc(current.location || '未填地點')}<br>${tripDurationName(current)} · ${levelText[current.level]}${details ? `<br>${details}` : ''}`;
     const context = document.querySelector('.trip-context');
     if (context) context.innerHTML = `${tripDateRange(current)}　${esc(current.location || '未填地點')}<br>${tripDurationName(current)} · ${levelText[current.level]}　｜　目的：${esc(cardPurpose(current))}${details ? `<br>${details}` : ''}`;
     const list = document.querySelector('#list-body');
