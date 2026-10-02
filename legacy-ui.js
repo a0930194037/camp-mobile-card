@@ -1079,13 +1079,15 @@ function decorateTripDetails() {
       const width = 1080;
       const items = tripData.items || [];
       const shopping = tripData.shopping || [];
+      const waterRows = (tripData.waterRows || []).filter(row => !row.removed);
+      const totalWeightGrams = items.reduce((total, item) => total + (Number(item.weightGrams) || 0), 0);
       const recipeNames = (tripData.recipeIds || [])
         .map(id => state.recipes.find(recipe => recipe.id === id)?.name)
         .filter(Boolean);
       // A card is an image, not a paginated document.  Its height grows with the
       // longer list so every item remains readable and the footer never overlaps it.
       const listRows = Math.max(items.length, shopping.length, 1);
-      const listStart = 680;
+      const listStart = 790;
       const footerTop = listStart + 72 + listRows * 42 + 58;
       const height = Math.max(1500, footerTop + 112);
       const canvas = document.createElement('canvas');
@@ -1171,6 +1173,18 @@ function decorateTripDetails() {
       context.fillStyle = '#18352a'; context.font = '700 27px sans-serif'; context.fillText('這天的菜單', left, 552);
       context.fillStyle = '#40564b'; context.font = '24px sans-serif';
       wrapped(recipeNames.join('、') || '尚未選擇料理', left, 586, 930, 30, 1);
+      context.fillStyle = '#18352a'; context.font = '700 24px sans-serif';
+      context.fillText(`預估裝備負重　${(totalWeightGrams / 1000).toFixed(2)} 公斤`, left, 646);
+      context.fillStyle = '#40564b'; context.font = '22px sans-serif';
+      const waterText = waterRows.length
+        ? waterRows.map(row => `${row.name || '飲用水'} ${row.ml || 0}ml${row.checked ? ' ✓' : ''}`).join('、')
+        : '未設定飲用水';
+      wrapped(`飲用水：${waterText}`, left, 684, 900, 28, 2);
+      const contextText = [
+        ...(tripData.goals || []).map(goal => goalText[goal] || goal),
+        ...(tripData.siteAmenities || [])
+      ].filter(Boolean).join('、') || '未設定';
+      wrapped(`行程情境：${contextText}`, left, 744, 900, 28, 1);
 
       listColumn('打包清單', done(items), items.length, items, left);
       listColumn('採買清單', done(shopping), shopping.length, shopping, shoppingX);
@@ -1185,11 +1199,11 @@ function decorateTripDetails() {
       // It is drawn after layout because it occupies only the reserved right hero space.
       const mapIllustration = new Image();
       mapIllustration.onload = () => {
-        context.drawImage(mapIllustration, 1024, 512, 512, 512, 718, 60, 298, 250);
+        context.drawImage(mapIllustration, 718, 54, 298, 250);
         finish();
       };
       mapIllustration.onerror = finish;
-      mapIllustration.src = 'assets/camping-illustrations-v1.png';
+      mapIllustration.src = 'assets/camp-map-chibi.png?v=20261003-chibi';
     });
   };
 
@@ -2138,6 +2152,33 @@ gearDialog = function gearDialogWithMeasurements(existing) {
   const sizes = [['xs', '極小（口袋／配件）'], ['small', '小型（手提）'], ['medium', '中型（收納袋）'], ['large', '大型（箱／袋）'], ['xl', '特大型（需獨立搬運）']];
   const root = dialog(`<h2>${existing ? '編輯裝備' : '新增裝備'}</h2><form id="gear-form"><input type="hidden" name="id" value="${esc(gear.id)}"><p class="system-id">系統編號：<strong id="auto-id">${esc(gear.id)}</strong></p><div class="form-grid"><div class="field"><label>裝備類別</label><select name="category">${categories.map(category => `<option ${gear.category === category ? 'selected' : ''}>${category}</option>`).join('')}</select></div><div class="field"><label>收納尺寸分級</label><select name="size">${sizes.map(([value, label]) => `<option value="${value}" ${gear.size === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field full"><label>名稱</label><input name="name" required value="${esc(gear.name)}" placeholder="例如：摺疊洗手盆"></div><div class="field"><label>收納尺寸（選填）</label><input name="dimensions" value="${esc(gear.dimensions || '')}" placeholder="長 × 寬 × 高 cm"></div><div class="field"><label>重量（選填，克）</label><input name="weightGrams" type="number" min="0" step="1" value="${Number(gear.weightGrams) || ''}" placeholder="例如：850"></div><div class="field full"><label>收納位置</label><input name="location" list="locations" value="${esc(gear.location)}"><datalist id="locations">${(state.locations || []).map(location => `<option value="${esc(location)}">`).join('')}</datalist></div><div class="field full"><label>適用量級</label><div class="compact-options">${Object.entries(levelText).map(([value, label]) => `<label><input name="level" type="checkbox" value="${value}" ${(gear.levels || []).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div></div><div class="field full"><label>適用情境</label><div class="compact-options">${Object.entries(goalText).map(([value, label]) => `<label><input name="context" type="checkbox" value="${value}" ${(gear.contexts || []).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div></div><div class="field full"><label>備註／搭配需求</label><textarea name="note">${esc(gear.note || '')}</textarea></div></div><p class="notice">重量會納入本次行程的預估負重；未填重量會以 0 公斤計算，且清單會標示未填。</p><div class="actions"><button class="primary">儲存至我的裝備</button><button type="button" class="secondary" id="cancel">取消</button>${existing ? '<button type="button" class="ghost danger" id="delete-gear">刪除</button>' : ''}</div></form>`);
   $('#cancel', root).onclick = closeDialog;
+};
+
+// Keep the PNG self-contained: the embedded payload has every trip-owned row
+// plus the catalogue records it references, rather than only the visual card.
+exportCard = async function exportCompleteTripCard(tripData) {
+  try {
+    const gearIds = new Set((tripData.items || []).map(item => item.gearId).filter(Boolean));
+    const recipeIds = new Set(tripData.recipeIds || []);
+    const snapshot = {
+      format: 'camp-card.v2', exportedAt: now(), trip: structuredClone(tripData),
+      related: {
+        gear: (state.gear || []).filter(gear => gearIds.has(gear.id) || gearIds.has(gear.syncId)),
+        recipes: (state.recipes || []).filter(recipe => recipeIds.has(recipe.id) || recipeIds.has(recipe.syncId)),
+        locations: [...(state.locations || [])]
+      }
+    };
+    const json = JSON.stringify(snapshot);
+    const meta = JSON.stringify({ format: snapshot.format, compression: 'gzip', sha256: await digest(json), payload: base64(await gzip(json)) });
+    const png = await drawCard(tripData);
+    const tagged = addPngChunk(new Uint8Array(await png.arrayBuffer()), 'caMp', meta);
+    const filename = `${tripData.date}_${safeFilePart(tripData.name)}_${safeFilePart(cardPurpose(tripData))}_${tripData.code}-v${tripData.revision}.png`;
+    download(new Blob([tagged], { type: 'image/png' }), filename);
+    notify('已匯出完整行程卡片；PNG 內含可還原的行程、裝備、料理、採買與飲水資料。');
+  } catch (error) {
+    console.error(error);
+    notify(`匯出失敗：${error.message}`, 'error');
+  }
 };
 
 /* Classic-script bridge: these names belong to the existing UI, not the sync engine. */
