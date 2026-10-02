@@ -41983,6 +41983,21 @@ ${suffix}`;
           }
         }
       }
+      const hiddenWaterRows = t.waterRows.filter((row) => row.lifecycle === "active" && row.removed);
+      const hiddenWaterSources = new Set(hiddenWaterRows.filter((row) => String(row.waterKey || "").startsWith("recipe-row:")).map((row) => String(row.waterKey).slice("recipe-row:".length)));
+      const hiddenLegacyWaterKeys = new Set(hiddenWaterRows.map((row) => row.waterKey).filter((key) => String(key || "").startsWith("recipe:")));
+      const waterKeyFor = (row) => {
+        const match = String(row.name || "").match(/(?:飲用水|熱水)\s*(\d+(?:\.\d+)?)\s*ml/i);
+        return match ? `recipe:${row.recipeId || ""}:${Math.round(Number(match[1]))}` : null;
+      };
+      if (hiddenWaterSources.size || hiddenLegacyWaterKeys.size) t.shopping = t.shopping.filter((row) => !hiddenWaterSources.has(row.syncId) && !hiddenLegacyWaterKeys.has(waterKeyFor(row)));
+      const activeRecipeIds = new Set(t.shopping.map((row) => row.recipeId).filter(Boolean));
+      t.recipeIds = t.recipeIds.filter((id) => activeRecipeIds.has(id));
+      for (const id of Object.keys(t.recipeMeals)) if (!activeRecipeIds.has(id)) {
+        delete t.recipeMeals[id];
+        delete t.recipeSnapshots[id];
+        delete t.recipeModified[id];
+      }
       if (entity.lifecycle === "active") state.trips.push(t);
       else if (entity.lifecycle === "cancelled") state.discardedTrips.push({ id: t.id, syncId: entity.id, trip: t, deletedAt: entity.updatedAt });
     }
