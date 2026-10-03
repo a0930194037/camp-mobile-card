@@ -20869,6 +20869,21 @@ var CampV8 = (() => {
         tx.lifecycle(tripId, "deleted");
       });
     }
+    purgeCompletedTrips(logIds) {
+      return this.run("purge-completed-trips", (tx) => {
+        for (const logId of new Set(logIds)) {
+          const log = tx.entities.get(logId);
+          if (!log || log.kind !== "log" || log.lifecycle !== "active") continue;
+          const tripId = values(log).tripId;
+          tx.lifecycle(log.id, "purged");
+          const trip = tx.entities.get(tripId);
+          if (trip && trip.kind === "trip" && trip.lifecycle !== "purged") tx.lifecycle(trip.id, "purged");
+          for (const entity of tx.entities.values()) {
+            if (entity.parentId === tripId && entity.lifecycle !== "purged") tx.lifecycle(entity.id, "purged");
+          }
+        }
+      });
+    }
     importRecords(records) {
       return this.run("import", (tx) => {
         for (const record of records) tx.create(record.kind, record.data, { id: record.id, parentId: record.parentId });
@@ -42472,6 +42487,21 @@ ${suffix}`;
       if (button.matches("[data-v8-download-recovery]")) {
         consume(event);
         downloadBackup();
+        return;
+      }
+      if (button.matches("[data-v8-delete-completed]")) {
+        consume(event);
+        const logs = [...lastEntities.values()].filter((entity) => entity.kind === "log" && entity.lifecycle === "active");
+        if (!logs.length) {
+          legacy.notify("\u76EE\u524D\u6C92\u6709\u5DF2\u5B8C\u6210\u884C\u7A0B\u53EF\u522A\u9664\u3002");
+          return;
+        }
+        if (button.dataset.confirm !== "true") {
+          button.dataset.confirm = "true";
+          button.textContent = `\u518D\u6B21\u9EDE\u64CA\u522A\u9664 ${logs.length} \u7B46\u5DF2\u5B8C\u6210\u884C\u7A0B`;
+          return;
+        }
+        run(button, () => commands.purgeCompletedTrips(logs.map((log) => log.id)), { close: true, page: "logs" });
         return;
       }
       if (button.matches("[data-favorite-recipe]")) {

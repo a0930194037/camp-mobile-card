@@ -1463,14 +1463,27 @@ function recipeLibraryDialog(existing) {
 }
 
 function recordsPage() {
-  const logs = state.logs || [];
+  const logs = [...(state.logs || [])].sort((left, right) => String(right.date || right.tripSnapshot?.date || '').localeCompare(String(left.date || left.tripSnapshot?.date || '')));
   const row = log => {
     const tripData = log.archivedTrip || log.tripSnapshot || {};
     const duration = tripData.duration === 'overnight' ? '2 日 1 夜' : tripData.duration === 'day' ? '日歸' : '';
     const level = tripData.level ? levelText[tripData.level] || tripData.level : '';
     return `<button class="card record-open archived-trip-row" data-action="open-archived-log" data-id="${esc(log.syncId || log.id)}"><div class="row between"><h3>${esc(log.name || tripData.name)}</h3><span class="tiny">已歸檔</span></div><div class="meta">${esc(log.date || tripData.date || '')} · ${esc(tripData.location || '未填地點')}${duration ? ` · ${duration}` : ''}${level ? ` · ${esc(level)}` : ''}</div><div class="progress"><span style="width:100%"></span></div></button>`;
   };
-  return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? logs.map(row).join('') : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
+  const grouped = new Map();
+  for (const log of logs) {
+    const tripData = log.archivedTrip || log.tripSnapshot || {};
+    const date = String(log.date || tripData.date || '');
+    const match = date.match(/^(\d{4})-(\d{2})/);
+    const year = match?.[1] || '未設定年份';
+    const month = match ? `${Number(match[2])} 月` : '未設定月份';
+    if (!grouped.has(year)) grouped.set(year, new Map());
+    const months = grouped.get(year);
+    if (!months.has(month)) months.set(month, []);
+    months.get(month).push(log);
+  }
+  const sections = [...grouped.entries()].map(([year, months]) => `<section class="record-year"><h3>${esc(year)}${year === '未設定年份' ? '' : ' 年'}</h3>${[...months.entries()].map(([month, rows]) => `<section class="record-month"><h4>${esc(month)}</h4>${rows.map(row).join('')}</section>`).join('')}</section>`).join('');
+  return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? sections : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
 }
 
 function archivedTripPage() {
@@ -1543,6 +1556,11 @@ render = function renderWithRecordAccess() {
 function openSettingsDialog() {
   const preferences = state.preferences || { defaultLevel: 'L1', defaultCampType: 'grass', defaultPrep: false, illustrations: true };
   const dialogRoot = dialog(`<h2>設定</h2><form id="settings-form"><div class="form-grid"><div class="field full"><label>新行程預設</label><span class="tiny">只影響之後建立的行程，不會改動既有行程。</span></div><div class="field"><label>預設量級</label><select name="defaultLevel">${Object.entries(levelText).map(([value, label]) => `<option value="${value}" ${preferences.defaultLevel === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label>預設營地環境</label><select name="defaultCampType">${[['grass','草地營位'],['pallet','棧板營位'],['forest','林地'],['riverside','溪邊'],['beach','海邊'],['mountain','山區'],['campground','一般營區'],['wild','野外營地']].map(([value, label]) => `<option value="${value}" ${preferences.defaultCampType === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field full"><label class="inline-label"><input type="checkbox" name="defaultPrep" ${preferences.defaultPrep ? 'checked' : ''}> 新行程預設在家先備料</label><label class="inline-label"><input type="checkbox" name="illustrations" ${preferences.illustrations !== false ? 'checked' : ''}> 顯示露營插圖</label><label class="inline-label"><input type="checkbox" name="autoTrimSuggestions" ${preferences.autoTrimSuggestions !== false ? 'checked' : ''}> 顯示裝備精簡建議</label></div><div class="field full settings-data"><label>資料與還原</label><p class="tiny">設定檔只包含裝備、料理與收納位置；行程與露營紀錄不會包含在內。</p><div class="actions"><button type="button" class="secondary" data-action="export-settings">備份設定檔</button><button type="button" class="secondary" data-action="import-settings">載入設定檔</button></div></div></div><div class="actions"><button class="primary">儲存設定</button><button type="button" class="secondary" id="cancel">取消</button></div></form>`);
+  const completedCount = (state.logs || []).length;
+  const completed = document.createElement('section');
+  completed.className = 'field full settings-completed-trips';
+  completed.innerHTML = `<label>已完成行程</label><p class="tiny">目前有 ${completedCount} 筆已歸檔行程。刪除會一併永久清除該行程的歷史清單與飲水、採買資料，裝備與料理資料庫不受影響。</p><button type="button" class="ghost danger" data-v8-delete-completed ${completedCount ? '' : 'disabled'}>刪除已完成行程</button>`;
+  dialogRoot.querySelector('.settings-data')?.after(completed);
   $('#cancel', dialogRoot).onclick = closeDialog;
   $('#settings-form', dialogRoot).onsubmit = async event => {
     event.preventDefault();
