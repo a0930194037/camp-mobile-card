@@ -113,10 +113,16 @@
     .nav button.nav-back { color:var(--muted)!important; background:transparent!important; font-weight:400!important; box-shadow:none!important; }
     .brand-tools { display:flex; align-items:center; gap:11px; }
     .header-settings { color:var(--green); font-size:11px; font-weight:800; padding:3px 0; }
-    .record-year { margin-top:22px; }
-    .record-year > h3 { margin:0; color:var(--green-deep); font-size:16px; }
-    .record-month { margin-top:12px; }
-    .record-month > h4 { margin:0; padding:7px 0; color:var(--muted); font-size:13px; border-bottom:1px solid var(--line); }
+    .record-year { margin-top:18px; border-bottom:1px solid var(--line); }
+    .record-year > summary, .record-month > summary { display:flex; align-items:center; justify-content:space-between; cursor:pointer; list-style:none; }
+    .record-year > summary::-webkit-details-marker, .record-month > summary::-webkit-details-marker { display:none; }
+    .record-year > summary { padding:8px 0; color:var(--green-deep); font-size:16px; font-weight:800; }
+    .record-month { margin:4px 0 10px; }
+    .record-month > summary { padding:8px 0; color:var(--muted); font-size:13px; font-weight:700; border-bottom:1px solid var(--line); }
+    .record-year summary::before, .record-month summary::before { content:'›'; margin-right:8px; font-size:18px; line-height:1; transition:transform .15s ease; }
+    .record-year[open] > summary::before, .record-month[open] > summary::before { transform:rotate(90deg); }
+    .record-year summary > span, .record-month summary > span { flex:1; }
+    .record-year summary small, .record-month summary small { color:var(--muted); font-size:11px; font-weight:500; }
     .settings-completed-trips { border-top:1px solid var(--line); padding-top:14px; }
     .page { position:relative; }
     .page-heading { display:flex; align-items:center; justify-content:space-between; gap:14px; padding-right:202px; min-height:164px; }

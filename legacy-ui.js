@@ -1482,7 +1482,11 @@ function recordsPage() {
     if (!months.has(month)) months.set(month, []);
     months.get(month).push(log);
   }
-  const sections = [...grouped.entries()].map(([year, months]) => `<section class="record-year"><h3>${esc(year)}${year === '未設定年份' ? '' : ' 年'}</h3>${[...months.entries()].map(([month, rows]) => `<section class="record-month"><h4>${esc(month)}</h4>${rows.map(row).join('')}</section>`).join('')}</section>`).join('');
+  const sections = [...grouped.entries()].map(([year, months], yearIndex) => {
+    const yearRows = [...months.values()].flat();
+    const monthSections = [...months.entries()].map(([month, rows], monthIndex) => `<details class="record-month" ${yearIndex === 0 && monthIndex === 0 ? 'open' : ''}><summary><span>${esc(month)}</span><small>${rows.length} 筆</small></summary>${rows.map(row).join('')}</details>`).join('');
+    return `<details class="record-year" ${yearIndex === 0 ? 'open' : ''}><summary><span>${esc(year)}${year === '未設定年份' ? '' : ' 年'}</span><small>${yearRows.length} 筆</small></summary>${monthSections}</details>`;
+  }).join('');
   return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? sections : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
 }
 
