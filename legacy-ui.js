@@ -1494,14 +1494,14 @@ function recordsPage() {
     months.get(month).push(log);
   }
   const openState = (key, defaultOpen) => completedRecordGroupState.has(key) ? completedRecordGroupState.get(key) : defaultOpen;
-  const sections = [...grouped.entries()].map(([year, months], yearIndex) => {
+  const sections = [...grouped.entries()].map(([year, months]) => {
     const yearRows = [...months.values()].flat();
     const yearKey = `year:${year}`;
-    const monthSections = [...months.entries()].map(([month, rows], monthIndex) => {
+    const monthSections = [...months.entries()].map(([month, rows]) => {
       const monthKey = `${yearKey}:month:${month}`;
-      return `<details class="record-month" data-record-group="${esc(monthKey)}" ${openState(monthKey, yearIndex === 0 && monthIndex === 0) ? 'open' : ''}><summary><span>${esc(month)}</span><small>${rows.length} 筆</small></summary>${rows.map(row).join('')}</details>`;
+      return `<details class="record-month" data-record-group="${esc(monthKey)}" ${openState(monthKey, false) ? 'open' : ''}><summary><span>${esc(month)}</span><small>${rows.length} 筆</small></summary>${rows.map(row).join('')}</details>`;
     }).join('');
-    return `<details class="record-year" data-record-group="${esc(yearKey)}" ${openState(yearKey, yearIndex === 0) ? 'open' : ''}><summary><span>${esc(year)}${year === '未設定年份' ? '' : ' 年'}</span><small>${yearRows.length} 筆</small></summary>${monthSections}</details>`;
+    return `<details class="record-year" data-record-group="${esc(yearKey)}" ${openState(yearKey, false) ? 'open' : ''}><summary><span>${esc(year)}${year === '未設定年份' ? '' : ' 年'}</span><small>${yearRows.length} 筆</small></summary>${monthSections}</details>`;
   }).join('');
   return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? sections : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
 }
