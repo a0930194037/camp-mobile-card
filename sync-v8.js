@@ -20707,12 +20707,15 @@ var CampV8 = (() => {
       const conflicts = docs.filter((d) => d.status === "conflict").length;
       const raw = await this.db.authority.find().exec(), seqs = new Map(raw.map((d) => [d.id, d.sequence]));
       const awaitingAuthority = docs.filter((d) => d.status === "accepted" && JSON.parse(d.request).operations.some((op) => (seqs.get(op.entityId) || 0) < JSON.parse(d.receipt).cursor)).length;
+      const offline = globalThis.navigator?.onLine === false;
       this.onStatus({
         pending,
         conflicts,
         awaitingAuthority,
         lastSuccess: this.lastSuccess,
         error: this.error,
+        authenticated: this.transport.authenticated,
+        offline,
         green: this.transport.authenticated !== false && !pending && !awaitingAuthority && !this.error && this.lastSuccess > 0 && Date.now() - this.lastSuccess < 3e4
       });
     }
@@ -42056,7 +42059,7 @@ ${suffix}`;
   function installLegacyAdapter({ repository, legacy, onSettings = () => {
   } }) {
     const commands = new CampCommands(repository), root = legacy.document || document;
-    let context3 = null, lastEntities = /* @__PURE__ */ new Map(), displayedEntities = /* @__PURE__ */ new Map(), status = { pending: 0, conflicts: 0, green: false }, disposed = false;
+    let context3 = null, lastEntities = /* @__PURE__ */ new Map(), displayedEntities = /* @__PURE__ */ new Map(), status = { pending: 0, conflicts: 0, green: true, offline: false }, disposed = false;
     const disposers = [];
     const ui = () => ({
       page: legacy.state?.page || "home",
@@ -42109,9 +42112,11 @@ ${suffix}`;
         tools.append(light);
       }
       light.hidden = false;
-      light.classList.toggle("is-online", !!status.green);
-      light.classList.toggle("is-offline", !status.green);
-      const label = status.error || (status.pending ? `\u7B49\u5F85\u540C\u6B65\uFF1A${status.pending} \u7B46` : status.conflicts ? `\u6709 ${status.conflicts} \u7B46\u885D\u7A81\u53EF\u6062\u5FA9` : status.green ? "\u5DF2\u540C\u6B65" : "\u96E2\u7DDA\uFF0F\u78BA\u8A8D\u9023\u7DDA\u4E2D");
+      const offline = status.offline === true || status.authenticated === false;
+      light.classList.toggle("is-online", !offline);
+      light.classList.toggle("is-offline", offline);
+      light.classList.remove("is-syncing");
+      const label = offline ? status.error || "\u96E2\u7DDA\uFF0F\u78BA\u8A8D\u9023\u7DDA\u4E2D" : status.pending ? `\u7B49\u5F85\u540C\u6B65\uFF1A${status.pending} \u7B46` : status.conflicts ? `\u6709 ${status.conflicts} \u7B46\u885D\u7A81\u53EF\u6062\u5FA9` : status.green ? "\u5DF2\u540C\u6B65" : "\u540C\u6B65\u72C0\u614B\u78BA\u8A8D\u4E2D";
       light.title = label;
       light.setAttribute("aria-label", label);
       light.onpointerdown = () => {
