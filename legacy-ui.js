@@ -1462,6 +1462,17 @@ function recipeLibraryDialog(existing) {
   };
 }
 
+// This is deliberately local UI state, not synchronized trip data. A remote
+// refresh may repaint the records page, but it must not reopen sections the
+// person on this device has just folded.
+const completedRecordGroupState = new Map();
+document.addEventListener('toggle', event => {
+  const group = event.target;
+  if (group instanceof HTMLDetailsElement && group.dataset.recordGroup) {
+    completedRecordGroupState.set(group.dataset.recordGroup, group.open);
+  }
+}, true);
+
 function recordsPage() {
   const logs = [...(state.logs || [])].sort((left, right) => String(right.date || right.tripSnapshot?.date || '').localeCompare(String(left.date || left.tripSnapshot?.date || '')));
   const row = log => {
@@ -1482,10 +1493,15 @@ function recordsPage() {
     if (!months.has(month)) months.set(month, []);
     months.get(month).push(log);
   }
+  const openState = (key, defaultOpen) => completedRecordGroupState.has(key) ? completedRecordGroupState.get(key) : defaultOpen;
   const sections = [...grouped.entries()].map(([year, months], yearIndex) => {
     const yearRows = [...months.values()].flat();
-    const monthSections = [...months.entries()].map(([month, rows], monthIndex) => `<details class="record-month" ${yearIndex === 0 && monthIndex === 0 ? 'open' : ''}><summary><span>${esc(month)}</span><small>${rows.length} 筆</small></summary>${rows.map(row).join('')}</details>`).join('');
-    return `<details class="record-year" ${yearIndex === 0 ? 'open' : ''}><summary><span>${esc(year)}${year === '未設定年份' ? '' : ' 年'}</span><small>${yearRows.length} 筆</small></summary>${monthSections}</details>`;
+    const yearKey = `year:${year}`;
+    const monthSections = [...months.entries()].map(([month, rows], monthIndex) => {
+      const monthKey = `${yearKey}:month:${month}`;
+      return `<details class="record-month" data-record-group="${esc(monthKey)}" ${openState(monthKey, yearIndex === 0 && monthIndex === 0) ? 'open' : ''}><summary><span>${esc(month)}</span><small>${rows.length} 筆</small></summary>${rows.map(row).join('')}</details>`;
+    }).join('');
+    return `<details class="record-year" data-record-group="${esc(yearKey)}" ${openState(yearKey, yearIndex === 0) ? 'open' : ''}><summary><span>${esc(year)}${year === '未設定年份' ? '' : ' 年'}</span><small>${yearRows.length} 筆</small></summary>${monthSections}</details>`;
   }).join('');
   return `<section class="page"><div><p class="eyebrow">回顧</p><h2 class="title">露營紀錄</h2></div><section class="record-section"><h3>已完成行程</h3>${logs.length ? sections : '<p class="sub">完成一場露營後，可從行程卡片選擇「結束並歸檔」。</p>'}</section></section>`;
 }
