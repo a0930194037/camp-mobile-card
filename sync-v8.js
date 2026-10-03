@@ -20874,13 +20874,7 @@ var CampV8 = (() => {
         for (const logId of new Set(logIds)) {
           const log = tx.entities.get(logId);
           if (!log || log.kind !== "log" || log.lifecycle !== "active") continue;
-          const tripId = values(log).tripId;
           tx.lifecycle(log.id, "purged");
-          const trip = tx.entities.get(tripId);
-          if (trip && trip.kind === "trip" && trip.lifecycle !== "purged") tx.lifecycle(trip.id, "purged");
-          for (const entity of tx.entities.values()) {
-            if (entity.parentId === tripId && entity.lifecycle !== "purged") tx.lifecycle(entity.id, "purged");
-          }
         }
       });
     }

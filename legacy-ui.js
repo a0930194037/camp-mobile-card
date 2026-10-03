@@ -1579,7 +1579,7 @@ function openSettingsDialog() {
   const completedCount = (state.logs || []).length;
   const completed = document.createElement('section');
   completed.className = 'field full settings-completed-trips';
-  completed.innerHTML = `<label>已完成行程</label><p class="tiny">目前有 ${completedCount} 筆已歸檔行程。刪除會一併永久清除該行程的歷史清單與飲水、採買資料，裝備與料理資料庫不受影響。</p><button type="button" class="ghost danger" data-v8-delete-completed ${completedCount ? '' : 'disabled'}>刪除已完成行程</button>`;
+  completed.innerHTML = `<label>已完成行程</label><p class="tiny">目前有 ${completedCount} 筆已歸檔行程。刪除會永久移除露營紀錄與可檢視內容；裝備與料理資料庫不受影響。</p><button type="button" class="ghost danger" data-v8-delete-completed ${completedCount ? '' : 'disabled'}>刪除已完成行程</button>`;
   dialogRoot.querySelector('.settings-data')?.after(completed);
   $('#cancel', dialogRoot).onclick = closeDialog;
   $('#settings-form', dialogRoot).onsubmit = async event => {
