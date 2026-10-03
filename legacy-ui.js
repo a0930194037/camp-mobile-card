@@ -1681,7 +1681,9 @@ header = function settingsHeader() {
   if (note) {
     const tools = document.createElement('div');
     tools.className = 'brand-tools';
-    tools.innerHTML = '<span class="brand-note">CAMP PLANNER</span><button type="button" class="header-settings" data-action="open-settings">設定</button>';
+    // The indicator starts in a visible offline state.  The sync adapter only
+    // changes its state class, so a rerender can never remove the control.
+    tools.innerHTML = '<span class="brand-note">CAMP PLANNER</span><button type="button" class="header-settings" data-action="open-settings">設定</button><button type="button" class="camp-sync-light is-offline" aria-label="離線／確認連線中" title="離線／確認連線中"></button>';
     note.replaceWith(tools);
   }
   return root.innerHTML;

@@ -42093,8 +42093,14 @@ ${suffix}`;
       throw new Error("\u672A\u63A5\u5165 v8 \u7684\u820A\u5BEB\u5165\u5DF2\u963B\u64CB\uFF1B\u8CC7\u6599\u672A\u9001\u51FA\u3002");
     });
     function statusLight() {
-      const tools = root.querySelector(".brand-tools");
-      if (!tools) return;
+      let tools = root.querySelector(".brand-tools");
+      if (!tools) {
+        const brand = root.querySelector(".brand");
+        if (!brand) return;
+        tools = root.createElement("div");
+        tools.className = "brand-tools";
+        brand.append(tools);
+      }
       let light = tools.querySelector(".camp-sync-light");
       if (!light) {
         light = root.createElement("button");
@@ -42102,6 +42108,7 @@ ${suffix}`;
         light.className = "camp-sync-light";
         tools.append(light);
       }
+      light.hidden = false;
       light.classList.toggle("is-online", !!status.green);
       light.classList.toggle("is-offline", !status.green);
       const label = status.error || (status.pending ? `\u7B49\u5F85\u540C\u6B65\uFF1A${status.pending} \u7B46` : status.conflicts ? `\u6709 ${status.conflicts} \u7B46\u885D\u7A81\u53EF\u6062\u5FA9` : status.green ? "\u5DF2\u540C\u6B65" : "\u96E2\u7DDA\uFF0F\u78BA\u8A8D\u9023\u7DDA\u4E2D");
