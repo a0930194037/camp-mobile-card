@@ -42493,9 +42493,10 @@ ${suffix}`;
     listen("submit", (event) => {
       const form = event.target;
       if (!form.closest(".dialog")) return;
+      const formId = form.getAttribute("id") || "";
       consume(event);
       const data = new FormData(form), ctx = context3;
-      run(event.submitter, () => submit(form.id, data, ctx, form), { close: true, page: form.id === "archive-form" ? "home" : null });
+      run(event.submitter, () => submit(formId, data, ctx, form), { close: true, page: formId === "archive-form" ? "home" : null });
     });
     async function submit(id, data, ctx, form) {
       const text = (key) => String(data.get(key) || "").trim();
