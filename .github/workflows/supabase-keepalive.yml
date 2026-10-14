@@ -1,0 +1,31 @@
+name: Supabase keepalive
+
+on:
+  # Daily database activity keeps the Free project active. UTC 03:17 = 11:17 Taiwan time.
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Record safe project activity
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEEPALIVE_KEY: ${{ secrets.SUPABASE_KEEPALIVE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_KEEPALIVE_KEY"
+          curl --fail-with-body --silent --show-error --retry 3 --retry-all-errors \
+            --request POST "$SUPABASE_URL/rest/v1/rpc/camp_v8_keepalive" \
+            --header "apikey: $SUPABASE_KEEPALIVE_KEY" \
+            --header "Authorization: Bearer $SUPABASE_KEEPALIVE_KEY" \
+            --header "Content-Type: application/json" \
+            --data '{}'
+          echo
+          echo 'Supabase keepalive completed.'
